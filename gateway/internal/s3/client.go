@@ -18,9 +18,16 @@ import (
 type Client struct {
 	api             *awss3.Client
 	bucket          string
+	region          string
+	internalEndpoint string
 	publicEndpoint  string
 	presignTTL      time.Duration
 	presigner       *awss3.PresignClient
+	// Stored explicitly so MintLiveSessionCredentials can vend them to
+	// the runner. In production this should be replaced by an STS
+	// AssumeRole flow that produces scoped temp credentials.
+	accessKeyID     string
+	secretAccessKey string
 }
 
 // New returns a configured S3 client. When accessKey/secret are empty,
@@ -63,12 +70,83 @@ func New(ctx context.Context, region, endpoint, publicEndpoint, bucket, accessKe
 		ttl = time.Hour
 	}
 	return &Client{
-		api:            api,
-		bucket:         bucket,
-		publicEndpoint: publicEndpoint,
-		presignTTL:     ttl,
-		presigner:      awss3.NewPresignClient(presignAPI),
+		api:              api,
+		bucket:           bucket,
+		region:           region,
+		internalEndpoint: endpoint,
+		publicEndpoint:   publicEndpoint,
+		presignTTL:       ttl,
+		presigner:        awss3.NewPresignClient(presignAPI),
+		accessKeyID:      accessKey,
+		secretAccessKey:  secret,
 	}, nil
+}
+
+// LiveSessionCredentials is the credential bundle the gateway sends to
+// the orchestrator's live-runner via the broker. The runner uses these
+// to write HLS output directly to our object store, scoped by key_prefix.
+//
+// v1 caveat: RustFS doesn't expose AWS STS / AssumeRole today, so this
+// returns the gateway's static bucket credentials with a key_prefix that
+// the runner is expected to honor by convention. This is a known trust
+// boundary — the orchestrator is trusted not to write outside the prefix.
+// Future hardening: real STS-style temporary credentials when RustFS
+// supports it, OR a per-session sidecar gateway proxy that signs PUTs
+// against arbitrary keys.
+type LiveSessionCredentials struct {
+	Endpoint        string    `json:"endpoint"`
+	Region          string    `json:"region"`
+	Bucket          string    `json:"bucket"`
+	KeyPrefix       string    `json:"key_prefix"`
+	AccessKeyID     string    `json:"access_key_id"`
+	SecretAccessKey string    `json:"secret_access_key"`
+	SessionToken    string    `json:"session_token,omitempty"`
+	ExpiresAt       time.Time `json:"expires_at"`
+}
+
+// MintLiveSessionCredentials returns a credential bundle scoped to the
+// given key prefix. The runner is expected to PutObject only under
+// `<bucket>/<keyPrefix>/...`. The TTL is informational in v1 (static
+// credentials don't actually expire); once STS lands it becomes real.
+//
+// keyPrefix should NOT have a trailing slash; the runner appends file
+// names directly to it.
+func (c *Client) MintLiveSessionCredentials(keyPrefix string, ttl time.Duration) (*LiveSessionCredentials, error) {
+	if c == nil {
+		return nil, errors.New("s3 not configured")
+	}
+	if keyPrefix == "" {
+		return nil, errors.New("s3: keyPrefix required")
+	}
+	if ttl <= 0 {
+		ttl = 4 * time.Hour
+	}
+	// The runner reaches our S3 from outside Docker, so it needs the
+	// PUBLIC endpoint, not the internal `http://rustfs:9000`.
+	endpoint := c.publicEndpoint
+	if endpoint == "" {
+		endpoint = c.internalEndpoint
+	}
+	return &LiveSessionCredentials{
+		Endpoint:        endpoint,
+		Region:          c.region,
+		Bucket:          c.bucket,
+		KeyPrefix:       strings.TrimRight(keyPrefix, "/"),
+		AccessKeyID:     c.accessKeyID,
+		SecretAccessKey: c.secretAccessKey,
+		SessionToken:    "", // empty until STS
+		ExpiresAt:       time.Now().Add(ttl),
+	}, nil
+}
+
+// PublicHLSMasterURL returns the customer-facing playback URL for a
+// gateway-ingest live session. Format mirrors the ABR output URL shape.
+func (c *Client) PublicHLSMasterURL(keyPrefix string) string {
+	if c == nil {
+		return ""
+	}
+	return fmt.Sprintf("%s/%s/%s/master.m3u8",
+		c.publicEndpoint, c.bucket, strings.TrimRight(keyPrefix, "/"))
 }
 
 // HeadBucket is a cheap readiness probe (used by /health).

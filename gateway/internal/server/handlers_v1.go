@@ -571,13 +571,14 @@ type LivePlayback struct {
 }
 
 type LiveSessionView struct {
-	ID         uuid.UUID    `json:"id"`
-	Status     string       `json:"status"`
-	Ingest     LiveIngest   `json:"ingest"`
-	Playback   LivePlayback `json:"playback"`
-	CreatedAt  time.Time    `json:"created_at"`
-	StartedAt  *time.Time   `json:"started_at,omitempty"`
-	EndedAt    *time.Time   `json:"ended_at,omitempty"`
+	ID          uuid.UUID    `json:"id"`
+	Status      string       `json:"status"`
+	Ingest      LiveIngest   `json:"ingest"`
+	Playback    LivePlayback `json:"playback"`
+	CloseReason string       `json:"close_reason,omitempty"`
+	CreatedAt   time.Time    `json:"created_at"`
+	StartedAt   *time.Time   `json:"started_at,omitempty"`
+	EndedAt     *time.Time   `json:"ended_at,omitempty"`
 }
 
 type LiveCreateOut struct {
@@ -604,131 +605,7 @@ func registerV1Live(api huma.API, deps Deps) {
 		if ak == nil {
 			return nil, huma.Error401Unauthorized("invalid_api_key")
 		}
-		spec := deps.CapMap.Live
-		candidates, err := deps.Resolver.SelectMany(ctx, service.SelectRequest{
-			Capability: spec.Capability,
-			Offering:   spec.DefaultOffering,
-		})
-		if err != nil {
-			return nil, huma.Error502BadGateway("registry_select_failed", err)
-		}
-		if len(candidates) == 0 {
-			return nil, huma.Error502BadGateway("no_capable_broker")
-		}
-		// No failover on live session-open — pick top candidate only.
-		c := candidates[0]
-		const liveInitialEstUnits int64 = 60_000 // ~1m initial budget; refined by broker
-		mintLive := func() (livepeer.MintEnvelopeResult, error) {
-			face := faceValue(liveInitialEstUnits, c.PricePerWorkUnitWei)
-			return deps.Payer.MintEnvelope(ctx, livepeer.MintRequest{
-				RecipientEthAddrHex:   c.EthAddress,
-				BrokerURL:             c.WorkerURL,
-				Capability:            c.Capability,
-				Offering:              c.Offering,
-				PricePerUnitWei:       c.PricePerWorkUnitWei,
-				UnitsPerPrice:         c.UnitsPerPrice,
-				WorkUnitName:          c.WorkUnit,
-				QuoteID:               c.QuoteID,
-				QuoteVersion:          c.QuoteVersion,
-				ConstraintFingerprint: c.ConstraintFingerprint,
-				RouteFingerprint:      c.RouteFingerprint,
-				EstimatedUnits:        uint64(liveInitialEstUnits),
-				FundedValueWei:        face,
-				MaxTotalUnits:         0, // 0 → defaults to estimated; live sessions can top-up
-				TopUpAllowed:          true,
-			})
-		}
-		envelope, err := mintLive()
-		if err != nil {
-			return nil, huma.Error502BadGateway("mint_payment_failed", err)
-		}
-		payment := envelope.PaymentBytes
-		ladderJSON, _ := json.Marshal(in.Body.Ladder)
-		// Open a long-lived reservation row.
-		workID := uuid.New()
-		res, err := deps.Usage.Open(ctx, repo.OpenInput{
-			APIKeyID:   ak.ID,
-			WorkID:     workID,
-			Capability: spec.Capability,
-			Offering:   spec.DefaultOffering,
-		})
-		if err != nil {
-			return nil, huma.Error500InternalServerError("reservation open", err)
-		}
-		live, err := deps.Live.Insert(ctx, repo.InsertLiveInput{
-			APIKeyID:      ak.ID,
-			ReservationID: &res.ID,
-			Name:          in.Body.Name,
-			Capability:    spec.Capability,
-			Offering:      spec.DefaultOffering,
-			LadderJSON:    ladderJSON,
-		})
-		if err != nil {
-			_ = deps.Usage.Refund(ctx, res.ID, 500, "live_insert_failed")
-			return nil, huma.Error500InternalServerError("live insert", err)
-		}
-		sess, err := livepeer.OpenLiveSession(ctx, deps.HTTP, c.WorkerURL,
-			c.Capability, c.Offering, RequestIDFrom(ctx), payment, ladderJSON)
-		if err != nil && livepeer.IsInvalidRecipientRandError(err) && envelope.WorkID != "" {
-			// Session-rotation retry-once on the live-open path. The
-			// receiver rotated since we last minted; evict our cached
-			// session and re-mint. Outcomes mirror the dispatcher's
-			// rotation label set so the same Prometheus counter covers
-			// both paths.
-			oldWID := envelope.WorkID
-			outcome := service.RotationOutcomeRetryFailed
-			if rerr := deps.Payer.ReportPaymentResult(ctx, oldWID, c.Capability, c.Offering,
-				paymentsv1.PaymentRejectionReason_PAYMENT_REJECTION_REASON_INVALID_RECIPIENT_RAND); rerr != nil {
-				outcome = service.RotationOutcomeReportFailed
-				deps.Log.Warn("live: session-rotation retry",
-					"work_id", oldWID, "capability", c.Capability, "outcome", outcome, "err", rerr)
-			} else if re, mintErr := mintLive(); mintErr != nil {
-				outcome = service.RotationOutcomeMintFailed
-				deps.Log.Warn("live: session-rotation retry",
-					"work_id", oldWID, "capability", c.Capability, "outcome", outcome, "err", mintErr)
-			} else {
-				envelope = re
-				payment = re.PaymentBytes
-				sess, err = livepeer.OpenLiveSession(ctx, deps.HTTP, c.WorkerURL,
-					c.Capability, c.Offering, RequestIDFrom(ctx), payment, ladderJSON)
-				if err == nil {
-					outcome = service.RotationOutcomeSucceeded
-					deps.Log.Info("live: session-rotation retry succeeded",
-						"work_id", oldWID, "capability", c.Capability)
-				} else {
-					deps.Log.Warn("live: session-rotation retry",
-						"work_id", oldWID, "capability", c.Capability, "outcome", outcome, "err", err)
-				}
-			}
-			deps.Metrics.SessionRotationRetries.WithLabelValues(c.Capability, outcome).Inc()
-		}
-		if err != nil {
-			_ = deps.Live.Fail(ctx, live.ID, err.Error())
-			_ = deps.Usage.Refund(ctx, res.ID, 502, err.Error())
-			return nil, huma.Error502BadGateway("broker_open_session_failed", err)
-		}
-		streamKeyHash := crypto.HashWithPepper(sess.StreamKey, deps.Cfg.IPHashPepper)
-		if err := deps.Live.Activate(ctx, live.ID, repo.ActivateLiveInput{
-			BrokerURL:     c.WorkerURL,
-			EthAddress:    c.EthAddress,
-			IngestURL:     sess.RTMPURL,
-			StreamKeyHash: streamKeyHash,
-			PlaybackURL:   sess.HLSURL,
-		}); err != nil {
-			_ = deps.Live.Fail(ctx, live.ID, err.Error())
-			_ = deps.Usage.Refund(ctx, res.ID, 500, "activate_failed")
-			return nil, huma.Error500InternalServerError("activate failed", err)
-		}
-		deps.Metrics.LiveStreamsActive.Inc()
-		out := &LiveCreateOut{}
-		out.Body.Session = LiveSessionView{
-			ID:        live.ID,
-			Status:    string(repo.LiveActive),
-			Ingest:    LiveIngest{RTMPURL: sess.RTMPURL, StreamKey: sess.StreamKey},
-			Playback:  LivePlayback{HLSURL: sess.HLSURL},
-			CreatedAt: live.CreatedAt,
-		}
-		return out, nil
+		return openLiveGatewayIngest(ctx, deps, ak, in)
 	})
 
 	huma.Register(api, huma.Operation{
@@ -748,15 +625,26 @@ func registerV1Live(api huma.API, deps Deps) {
 		if err != nil || live == nil {
 			return nil, huma.Error404NotFound("not_found")
 		}
+		// On-GET reconcile against broker GET /v1/cap/{bsess}. Best
+		// effort: failure here doesn't fail the customer request — the
+		// background reconciler will catch the row on its next tick.
+		// Only reconcile sessions that aren't already terminal.
+		if live.BrokerSessionID != nil && live.BrokerURL != nil &&
+			(live.Status == repo.LiveProvisioning || live.Status == repo.LiveActive) {
+			if updated := reconcileLiveSession(ctx, deps, live); updated != nil {
+				live = updated
+			}
+		}
 		out := &LiveCreateOut{}
 		out.Body.Session = LiveSessionView{
-			ID:        live.ID,
-			Status:    string(live.Status),
-			Ingest:    LiveIngest{RTMPURL: derefString(live.IngestURL)},
-			Playback:  LivePlayback{HLSURL: derefString(live.PlaybackURL)},
-			CreatedAt: live.CreatedAt,
-			StartedAt: live.StartedAt,
-			EndedAt:   live.EndedAt,
+			ID:          live.ID,
+			Status:      string(live.Status),
+			Ingest:      LiveIngest{RTMPURL: derefString(live.IngestURL)}, // no plaintext stream key on GET
+			Playback:    LivePlayback{HLSURL: derefString(live.PlaybackURL)},
+			CloseReason: derefString(live.CloseReason),
+			CreatedAt:   live.CreatedAt,
+			StartedAt:   live.StartedAt,
+			EndedAt:     live.EndedAt,
 		}
 		return out, nil
 	})
@@ -779,25 +667,371 @@ func registerV1Live(api huma.API, deps Deps) {
 			return nil, huma.Error404NotFound("not_found")
 		}
 		if live.Status == repo.LiveEnded || live.Status == repo.LiveFailed {
-			return nil, huma.Error409Conflict("live_already_ended")
+			// Idempotent from the customer's perspective.
+			out := &GenericOK{}
+			out.Body.OK = true
+			return out, nil
 		}
-		// Best-effort broker teardown.
-		if live.BrokerURL != nil {
-			_ = livepeer.CloseLiveSession(ctx, deps.HTTP, *live.BrokerURL, live.ID.String())
+		// Best-effort broker teardown. The broker's /v1/cap/{bsess}/end
+		// is idempotent server-side; we don't fail the customer if it
+		// returns an error — we still mark the row ended locally.
+		closeReason := livepeer.LiveCloseGatewayClose
+		if live.BrokerSessionID != nil && live.BrokerURL != nil {
+			if endResp, endErr := deps.HTTP.EndLiveSession(ctx,
+				*live.BrokerURL, *live.BrokerSessionID, RequestIDFrom(ctx), closeReason); endErr != nil {
+				deps.Log.Warn("live: broker end failed; marking ended locally anyway",
+					"live_id", live.ID, "broker_session_id", *live.BrokerSessionID, "err", endErr)
+			} else if endResp != nil && endResp.CloseReason != "" {
+				closeReason = endResp.CloseReason
+			}
 		}
-		_ = deps.Live.End(ctx, live.ID)
-		if live.ReservationID != nil {
-			_ = deps.Usage.Commit(ctx, *live.ReservationID, repo.CommitInput{
-				BrokerURL:  derefString(live.BrokerURL),
-				EthAddress: derefString(live.EthAddress),
-			})
-		}
+		_ = deps.Live.EndWithReason(ctx, live.ID, repo.LiveEnded, closeReason)
+		// Per the runner team's call (E): no refund on customer DELETE
+		// of an accepted session; the reservation was already committed
+		// at session-open time. We just decrement the active gauge.
 		deps.Metrics.LiveStreamsActive.Dec()
-		deps.Metrics.ProxyReservationsTotal.WithLabelValues(live.Capability, "committed").Inc()
 		out := &GenericOK{}
 		out.Body.OK = true
 		return out, nil
 	})
+}
+
+// reconcileLiveSession polls the broker for the latest state of one
+// session and writes the result back to live_streams. Used by both the
+// on-GET path (above) and the background reconciler (Phase 6). Returns
+// the freshly-loaded row when a write happened; nil if reconciliation
+// produced no actionable change.
+func reconcileLiveSession(ctx context.Context, deps Deps, live *repo.LiveStream) *repo.LiveStream {
+	if live == nil || live.BrokerSessionID == nil || live.BrokerURL == nil {
+		return nil
+	}
+	resp, err := deps.HTTP.GetLiveSession(ctx, *live.BrokerURL, *live.BrokerSessionID)
+	if err != nil {
+		deps.Log.Debug("live reconcile: broker GET failed",
+			"live_id", live.ID, "broker_session_id", *live.BrokerSessionID, "err", err)
+		return nil
+	}
+	mappedStatus, endedAt := mapBrokerState(resp.State)
+	if mappedStatus == "" {
+		return nil
+	}
+	snap := repo.ReconcileSnapshot{
+		Status:      mappedStatus,
+		PlaybackURL: resp.Media.Playback.HLSURL,
+	}
+	if resp.CloseReason != nil {
+		snap.CloseReason = *resp.CloseReason
+	}
+	if resp.LastHeartbeatAt != nil {
+		if t, perr := time.Parse(time.RFC3339, *resp.LastHeartbeatAt); perr == nil {
+			snap.Heartbeat = &t
+		}
+	}
+	if endedAt && resp.EndedAt != nil {
+		if t, perr := time.Parse(time.RFC3339, *resp.EndedAt); perr == nil {
+			snap.EndedAt = &t
+		}
+	}
+	if err := deps.Live.RecordBrokerSync(ctx, live.ID, snap); err != nil {
+		deps.Log.Warn("live reconcile: persist failed", "live_id", live.ID, "err", err)
+		return nil
+	}
+	// Re-load so callers see the freshly-written state.
+	reloaded, _ := deps.Live.GetByID(ctx, live.ID, live.APIKeyID)
+	return reloaded
+}
+
+// mapBrokerState turns the broker's state vocabulary into the gateway's
+// existing LiveStreamStatus enum per the runner team's mapping. Returns
+// "" when the broker state isn't recognized — we leave the row alone
+// rather than guess.
+func mapBrokerState(brokerState string) (repo.LiveStreamStatus, bool) {
+	switch brokerState {
+	case livepeer.LiveStateProvisioning,
+		livepeer.LiveStateReady:
+		return repo.LiveProvisioning, false
+	case livepeer.LiveStatePublishing,
+		livepeer.LiveStateEnding:
+		return repo.LiveActive, false
+	case livepeer.LiveStateEnded:
+		return repo.LiveEnded, true
+	case livepeer.LiveStateFailed:
+		return repo.LiveFailed, true
+	}
+	return "", false
+}
+
+// ladderFromInput converts the customer-facing ABRLadder (used for both
+// ABR and live by historical reuse) into the live-session-remote-runner
+// wire shape. Returns nil for empty / unspecified ladders so the broker
+// falls back to the capability default.
+func ladderFromInput(in *ABRLadder) *livepeer.LiveLadder {
+	if in == nil || len(in.Rungs) == 0 {
+		return nil
+	}
+	rungs := make([]livepeer.LiveLadderRung, 0, len(in.Rungs))
+	for _, r := range in.Rungs {
+		rungs = append(rungs, livepeer.LiveLadderRung{
+			Name:        r.Name,
+			Width:       r.Width,
+			Height:      r.Height,
+			BitrateKbps: r.BitrateKbps,
+			Passthrough: r.Passthrough,
+		})
+	}
+	return &livepeer.LiveLadder{Rungs: rungs}
+}
+
+// openLiveGatewayIngest implements the plan-0003 path:
+//   1. resolve a live-capable orch
+//   2. mint payment
+//   3. open local row in 'gateway_ingest' mode
+//   4. generate customer stream key + gateway↔runner ingest credential
+//   5. mint S3 output credential scoped to the session's prefix
+//   6. call broker /v1/cap with the new mode body
+//   7. activate the row with broker-returned IDs + persist all artifacts
+//   8. return customer-facing URLs (gateway RTMP + our S3 HLS)
+func openLiveGatewayIngest(ctx context.Context, deps Deps, ak *repo.APIKey, in *LiveIn) (*LiveCreateOut, error) {
+	if deps.S3 == nil {
+		return nil, huma.Error503ServiceUnavailable("s3_unavailable")
+	}
+	if deps.Cfg.LiveRTMPPort <= 0 {
+		return nil, huma.Error503ServiceUnavailable("rtmp_ingress_disabled",
+			fmt.Errorf("set LIVE_RTMP_PORT to enable gateway_ingest mode"))
+	}
+	// Resolve a live-capable orch under `video:transcode.live` with the
+	// gateway-ingest offering label.
+	gwCapability := deps.CapMap.Live.Capability
+	gwOffering := deps.Cfg.LiveGatewayIngestOffering
+	if gwOffering == "" {
+		gwOffering = "gateway-ingest"
+	}
+	candidates, err := deps.Resolver.SelectMany(ctx, service.SelectRequest{
+		Capability: gwCapability,
+		Offering:   gwOffering,
+	})
+	if err != nil {
+		return nil, huma.Error502BadGateway("registry_select_failed", err)
+	}
+	if len(candidates) == 0 {
+		return nil, huma.Error502BadGateway("no_capable_broker")
+	}
+	c := candidates[0]
+
+	const liveInitialEstUnits int64 = 60_000
+	face := faceValue(liveInitialEstUnits, c.PricePerWorkUnitWei)
+	envelope, err := deps.Payer.MintEnvelope(ctx, livepeer.MintRequest{
+		RecipientEthAddrHex:   c.EthAddress,
+		BrokerURL:             c.WorkerURL,
+		Capability:            c.Capability,
+		Offering:              c.Offering,
+		PricePerUnitWei:       c.PricePerWorkUnitWei,
+		UnitsPerPrice:         c.UnitsPerPrice,
+		WorkUnitName:          c.WorkUnit,
+		QuoteID:               c.QuoteID,
+		QuoteVersion:          c.QuoteVersion,
+		ConstraintFingerprint: c.ConstraintFingerprint,
+		RouteFingerprint:      c.RouteFingerprint,
+		EstimatedUnits:        uint64(liveInitialEstUnits),
+		FundedValueWei:        face,
+		MaxTotalUnits:         0,
+		TopUpAllowed:          true,
+	})
+	if err != nil {
+		return nil, huma.Error502BadGateway("mint_payment_failed", err)
+	}
+
+	// Open reservation row + live row in 'gateway_ingest' mode. The
+	// row's capability records the gateway-ingest id (NOT the legacy
+	// LIVE_CAPABILITY) so admin views can group cleanly by mode.
+	ladderJSON, _ := json.Marshal(in.Body.Ladder)
+	workID := uuid.New()
+	res, err := deps.Usage.Open(ctx, repo.OpenInput{
+		APIKeyID:   ak.ID,
+		WorkID:     workID,
+		Capability: gwCapability,
+		Offering:   gwOffering,
+	})
+	if err != nil {
+		return nil, huma.Error500InternalServerError("reservation open", err)
+	}
+	live, err := deps.Live.Insert(ctx, repo.InsertLiveInput{
+		APIKeyID:      ak.ID,
+		ReservationID: &res.ID,
+		Name:          in.Body.Name,
+		Capability:    gwCapability,
+		Offering:      gwOffering,
+		LadderJSON:    ladderJSON,
+	})
+	if err != nil {
+		_ = deps.Usage.Refund(ctx, res.ID, 500, "live_insert_failed")
+		return nil, huma.Error500InternalServerError("live insert", err)
+	}
+	_ = deps.Usage.SetLiveStreamID(ctx, workID, live.ID)
+
+	// Two distinct credentials minted here:
+	//   - customerStreamKey: what we hand the customer for OBS
+	//   - ingestAcceptKey:   what we'll present when pushing RTMP upstream
+	customerStreamKey, err := crypto.RandomToken(24)
+	if err != nil {
+		_ = deps.Usage.Refund(ctx, res.ID, 500, "stream_key_gen_failed")
+		_ = deps.Live.Fail(ctx, live.ID, "stream_key_gen_failed")
+		return nil, huma.Error500InternalServerError("stream_key gen", err)
+	}
+	customerStreamKey = "lvk_" + customerStreamKey
+	ingestAcceptKey, _ := crypto.RandomToken(24)
+	ingestAcceptKey = "gws_" + ingestAcceptKey
+
+	// S3 output credentials scoped to live-out/<api_key>/<live_id>/.
+	keyPrefix := fmt.Sprintf("live-out/%s/%s", ak.ID, live.ID)
+	credTTL := time.Duration(deps.Cfg.LiveS3CredentialTTLHrs) * time.Hour
+	if credTTL <= 0 {
+		credTTL = 4 * time.Hour
+	}
+	creds, err := deps.S3.MintLiveSessionCredentials(keyPrefix, credTTL)
+	if err != nil {
+		_ = deps.Usage.Refund(ctx, res.ID, 500, "s3_creds_failed")
+		_ = deps.Live.Fail(ctx, live.ID, "s3_creds_failed")
+		return nil, huma.Error500InternalServerError("s3 credential mint", err)
+	}
+
+	// Call broker /v1/cap with the new mode body.
+	openBody := livepeer.LiveOpenGatewayIngestRequest{
+		GatewaySessionID: live.ID,
+		SessionParams: livepeer.LiveOpenParams{
+			Name:               in.Body.Name,
+			IdleTimeoutSeconds: deps.Cfg.LiveIdleTimeoutSecs,
+			Ladder:             ladderFromInput(in.Body.Ladder),
+		},
+		OutputCredential: livepeer.LiveOutputCredential{
+			Endpoint:        creds.Endpoint,
+			Region:          creds.Region,
+			Bucket:          creds.Bucket,
+			KeyPrefix:       creds.KeyPrefix,
+			AccessKeyID:     creds.AccessKeyID,
+			SecretAccessKey: creds.SecretAccessKey,
+			SessionToken:    creds.SessionToken,
+			ExpiresAt:       creds.ExpiresAt.UTC().Format(time.RFC3339),
+		},
+		IngestAccept: livepeer.LiveIngestAccept{StreamKey: ingestAcceptKey},
+	}
+	sess, err := deps.HTTP.OpenLiveSessionGatewayIngest(ctx, c.WorkerURL,
+		c.Capability, c.Offering, RequestIDFrom(ctx), envelope.PaymentBytes, openBody)
+	if err != nil {
+		// Session-rotation retry-once: if the broker rejects our payment
+		// envelope because the receiver rotated, ReportPaymentResult to
+		// evict + re-mint + retry once before giving up.
+		if livepeer.IsInvalidRecipientRandError(err) && envelope.WorkID != "" {
+			if rerr := deps.Payer.ReportPaymentResult(ctx, envelope.WorkID, c.Capability, c.Offering,
+				paymentsv1.PaymentRejectionReason_PAYMENT_REJECTION_REASON_INVALID_RECIPIENT_RAND); rerr == nil {
+				// Re-mint and retry once.
+				face2 := faceValue(liveInitialEstUnits, c.PricePerWorkUnitWei)
+				if re, mintErr := deps.Payer.MintEnvelope(ctx, livepeer.MintRequest{
+					RecipientEthAddrHex:   c.EthAddress,
+					BrokerURL:             c.WorkerURL,
+					Capability:            c.Capability,
+					Offering:              c.Offering,
+					PricePerUnitWei:       c.PricePerWorkUnitWei,
+					UnitsPerPrice:         c.UnitsPerPrice,
+					WorkUnitName:          c.WorkUnit,
+					QuoteID:               c.QuoteID,
+					QuoteVersion:          c.QuoteVersion,
+					ConstraintFingerprint: c.ConstraintFingerprint,
+					RouteFingerprint:      c.RouteFingerprint,
+					EstimatedUnits:        uint64(liveInitialEstUnits),
+					FundedValueWei:        face2,
+					MaxTotalUnits:         0,
+					TopUpAllowed:          true,
+				}); mintErr == nil {
+					envelope = re
+					sess, err = deps.HTTP.OpenLiveSessionGatewayIngest(ctx, c.WorkerURL,
+						c.Capability, c.Offering, RequestIDFrom(ctx), re.PaymentBytes, openBody)
+				}
+			}
+		}
+	}
+	if err != nil {
+		_ = deps.Live.Fail(ctx, live.ID, err.Error())
+		_ = deps.Usage.Refund(ctx, res.ID, 502, err.Error())
+		return nil, huma.Error502BadGateway("broker_open_session_failed", err)
+	}
+
+	// Activate row with the broker-issued IDs + our generated credentials.
+	streamKeyHash := crypto.HashWithPepper(customerStreamKey, deps.Cfg.IPHashPepper)
+	streamKeyHint := lastFour(customerStreamKey)
+	playbackURL := deps.S3.PublicHLSMasterURL(creds.KeyPrefix)
+	brokerWorkID := sess.WorkID
+	if err := deps.Live.ActivateGatewayIngest(ctx, live.ID, repo.ActivateLiveGatewayInput{
+		BrokerURL:        c.WorkerURL,
+		EthAddress:       c.EthAddress,
+		StreamKeyHash:    streamKeyHash,
+		StreamKeyHint:    streamKeyHint,
+		S3OutputPrefix:   creds.KeyPrefix,
+		PrivateIngestURL: sess.PrivateIngestURL,
+		PlaybackURL:      playbackURL,
+		BrokerSessionID:  sess.BrokerSessionID,
+		RunnerSessionID:  sess.RunnerSessionID,
+		BrokerWorkID:     &brokerWorkID,
+	}); err != nil {
+		_ = deps.Live.Fail(ctx, live.ID, err.Error())
+		_ = deps.Usage.Refund(ctx, res.ID, 500, "activate_failed")
+		return nil, huma.Error500InternalServerError("activate failed", err)
+	}
+	// Reservation commits on accept; no refund on later customer DELETE
+	// (matches plan 0002 semantics).
+	statusCode := 200
+	_ = deps.Usage.Commit(ctx, res.ID, repo.CommitInput{
+		BrokerURL:  c.WorkerURL,
+		EthAddress: c.EthAddress,
+		StatusCode: &statusCode,
+	})
+	deps.Metrics.ProxyReservationsTotal.WithLabelValues(c.Capability, "committed").Inc()
+	deps.Metrics.LiveStreamsActive.Inc()
+
+	// Construct the customer-facing RTMP URL rooted at OUR gateway. The
+	// stream key is returned in cleartext exactly once.
+	gatewayHost := deps.Cfg.GatewayPublicURL
+	if gatewayHost == "" {
+		// Fall back to a relative host hint; customers can substitute.
+		gatewayHost = "rtmp://<your-gateway-host>"
+	} else {
+		// Strip scheme if it's http(s) and substitute rtmp.
+		gatewayHost = stripScheme(gatewayHost)
+		gatewayHost = "rtmp://" + gatewayHost
+	}
+	rtmpURL := fmt.Sprintf("%s:%d/live/%s", gatewayHost, deps.Cfg.LiveRTMPPort, customerStreamKey)
+
+	out := &LiveCreateOut{}
+	out.Body.Session = LiveSessionView{
+		ID:        live.ID,
+		Status:    string(repo.LiveActive),
+		Ingest:    LiveIngest{RTMPURL: rtmpURL, StreamKey: customerStreamKey},
+		Playback:  LivePlayback{HLSURL: playbackURL},
+		CreatedAt: live.CreatedAt,
+	}
+	return out, nil
+}
+
+// lastFour mirrors the helper in internal/rtmp — duplicated locally to
+// avoid importing the rtmp package (which would create a cycle with the
+// server package via Deps).
+func lastFour(s string) string {
+	if len(s) <= 4 {
+		return s
+	}
+	return s[len(s)-4:]
+}
+
+// stripScheme returns the host[:port] portion of a URL, removing
+// http:// or https:// prefixes. Used so we can substitute rtmp:// for
+// the customer-facing ingest URL.
+func stripScheme(s string) string {
+	for _, p := range []string{"https://", "http://"} {
+		if strings.HasPrefix(s, p) {
+			return s[len(p):]
+		}
+	}
+	return s
 }
 
 // faceValue derives a wei face value from estimated units × price/unit.

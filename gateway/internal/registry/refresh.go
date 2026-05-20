@@ -140,10 +140,15 @@ func parseBig(s string) *big.Int {
 
 // guessInteractionMode returns the canonical mode for a known capability
 // name. Unknown capabilities fall back to http-reqresp.
+//
+// Used for catalog metadata only — the gateway dispatches via the
+// CapMap (livepeer.NewDefault), which is the actual source of truth
+// for the Livepeer-Mode header. Keeping this heuristic aligned with
+// the CapMap defaults avoids confusing the admin Registry view.
 func guessInteractionMode(capability string) string {
 	switch {
 	case isLive(capability):
-		return "rtmp-ingress-hls-egress@v0"
+		return "live-session-remote-runner@v0"
 	default:
 		return "http-reqresp@v0"
 	}

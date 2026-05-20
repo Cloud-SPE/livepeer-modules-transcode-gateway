@@ -17,6 +17,10 @@ type Registry struct {
 	WaitlistSignupsTotal     prometheus.Counter
 	RouteHealthCooldowns     *prometheus.CounterVec
 	SessionRotationRetries   *prometheus.CounterVec
+	LiveTopupAttempts        *prometheus.CounterVec
+	// Plan 0003: gateway-side RTMP ingest plane.
+	RTMPActivePublishes      prometheus.GaugeFunc
+	RTMPPublishesTotal       *prometheus.CounterVec // labels: outcome (accepted | rejected)
 }
 
 func New() *Registry {
@@ -60,5 +64,30 @@ func New() *Registry {
 			Name: "livepeer_gateway_session_rotation_retries_total",
 			Help: "INVALID_RECIPIENT_RAND retries observed by the dispatcher, by capability and outcome.",
 		}, []string{"capability", "outcome"}),
+		// Outcomes: succeeded, mint_failed, broker_failed, resolver_failed.
+		// Fires from the live reconciler's auto-topup path. Distinct from
+		// SessionRotationRetries because a top-up triggered by runway
+		// exhaustion is a different signal than a session-rand rotation.
+		LiveTopupAttempts: f.NewCounterVec(prometheus.CounterOpts{
+			Name: "livepeer_gateway_live_topup_attempts_total",
+			Help: "Auto-topup attempts triggered by the live reconciler, by capability and outcome.",
+		}, []string{"capability", "outcome"}),
+		RTMPPublishesTotal: f.NewCounterVec(prometheus.CounterOpts{
+			Name: "livepeer_gateway_rtmp_publishes_total",
+			Help: "RTMP publish authentication outcomes (plan 0003).",
+		}, []string{"outcome"}),
 	}
+}
+
+// AttachRTMPGauge wires the RTMP server's active-publishes counter to a
+// Prometheus gauge. Called once after the RTMP server is constructed so
+// the metric reflects live state without us pushing every change.
+func (r *Registry) AttachRTMPGauge(reader func() int64) {
+	if r == nil || reader == nil {
+		return
+	}
+	r.RTMPActivePublishes = promauto.With(r.Reg).NewGaugeFunc(prometheus.GaugeOpts{
+		Name: "livepeer_gateway_rtmp_active_publishes",
+		Help: "Current number of authenticated RTMP publishes the gateway is relaying (plan 0003).",
+	}, func() float64 { return float64(reader()) })
 }

@@ -53,7 +53,7 @@ POST /v1/live
    `usage_reservations` row (state=`open`) and an associated
    `live_streams` row (status=`provisioning`).
 2. **Route selection.** `Resolver.SelectMany(capability=
-   'livepeer:transcode/live-rtmp-hls-abr', …)` returns ranked
+   'video:transcode.live', …)` returns ranked
    candidates. Pick the top one (no failover on session-open).
 3. **Mint envelope.** `face_value` sized for the session's initial
    estimated work units (configurable via ladder size + an internal

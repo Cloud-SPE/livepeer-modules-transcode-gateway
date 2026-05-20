@@ -94,25 +94,37 @@ const (
 	LiveFailed       LiveStreamStatus = "failed"
 )
 
+
 type LiveStream struct {
-	ID              uuid.UUID
-	APIKeyID        uuid.UUID
-	ReservationID   *uuid.UUID
-	Name            *string
-	Status          LiveStreamStatus
-	Capability      string
-	Offering        string
-	BrokerURL       *string
-	EthAddress      *string
-	IngestURL       *string
-	StreamKeyHash   *string
-	PlaybackURL     *string
-	LadderJSON      []byte
-	ErrorText       *string
-	CreatedAt       time.Time
-	StartedAt       *time.Time
-	LastHeartbeatAt *time.Time
-	EndedAt         *time.Time
+	ID                uuid.UUID
+	APIKeyID          uuid.UUID
+	ReservationID     *uuid.UUID
+	Name              *string
+	Status            LiveStreamStatus
+	Capability        string
+	Offering          string
+	BrokerURL         *string
+	EthAddress        *string
+	IngestURL         *string
+	StreamKeyHash     *string
+	PlaybackURL       *string
+	LadderJSON        []byte
+	ErrorText         *string
+	// live-session-remote-runner@v0 identifiers (migration 0005). Nil
+	// for legacy rows opened before the broker-paid / runner-media split.
+	BrokerSessionID   *string
+	RunnerSessionID   *string
+	BrokerWorkID      *uuid.UUID
+	CloseReason       *string
+	LastBrokerSyncAt  *time.Time
+	// live-session-gateway-ingest@v0 identifiers (migration 0006).
+	S3OutputPrefix    *string
+	PrivateIngestURL  *string
+	StreamKeyHint     *string
+	CreatedAt         time.Time
+	StartedAt         *time.Time
+	LastHeartbeatAt   *time.Time
+	EndedAt           *time.Time
 }
 
 type Capability struct {

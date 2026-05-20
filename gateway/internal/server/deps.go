@@ -34,4 +34,20 @@ type Deps struct {
 	HTTP     *livepeer.HTTPClient
 	CapMap   livepeer.CapabilityMap
 	Metrics  *metrics.Registry
+	// RTMPProbe is a cheap readiness check the /health handler calls
+	// for the gateway-side RTMP ingest. Implemented in the rtmp package;
+	// nil when LIVE_RTMP_PORT is unset.
+	RTMPProbe RTMPProbe
+}
+
+// RTMPProbe is the interface /health uses to query the RTMP server's
+// current state. Decoupled so the server package doesn't import the
+// rtmp package directly (avoids the circular-import risk if rtmp ever
+// needs anything from server).
+type RTMPProbe interface {
+	// ActivePublishes returns the current count of authenticated
+	// publishes. Cheap; safe to call from a hot path.
+	ActivePublishes() int64
+	// Listening reports whether the listener socket is bound.
+	Listening() bool
 }

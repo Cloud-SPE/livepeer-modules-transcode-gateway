@@ -2,8 +2,13 @@ package livepeer
 
 // InteractionMode constants from livepeer-network-protocol.
 const (
-	ModeHTTPReqResp        = "http-reqresp@v0"
-	ModeRTMPIngressHLSOut  = "rtmp-ingress-hls-egress@v0"
+	ModeHTTPReqResp = "http-reqresp@v0"
+	// ModeLiveSessionGatewayIngest is the gateway↔broker contract for
+	// live transcode. The gateway owns public RTMP ingest, the broker is
+	// the paid control plane, and the runner ingests from the gateway
+	// and writes HLS to gateway-owned S3. Wire spec:
+	// livepeer-network-protocol/modes/live-session-gateway-ingest.md
+	ModeLiveSessionGatewayIngest = "live-session-gateway-ingest@v0"
 )
 
 // CapabilityMap describes how a product surface (ABR job, live session)
@@ -33,8 +38,8 @@ func NewDefault(abrCapability, liveCapability string) CapabilityMap {
 		},
 		Live: CapabilitySpec{
 			Capability:      liveCapability,
-			DefaultOffering: "default",
-			InteractionMode: ModeRTMPIngressHLSOut,
+			DefaultOffering: "gateway-ingest",
+			InteractionMode: ModeLiveSessionGatewayIngest,
 		},
 	}
 }

@@ -288,6 +288,17 @@ func (r *ReservationRepo) SummaryByCapability(ctx context.Context, since time.Ti
 	return out, rows.Err()
 }
 
+// SetLiveStreamID links a reservation to the live session it funded.
+// One live session has many reservations (initial open + each top-up
+// envelope); this is the inbound foreign key the reconciler and admin
+// views use to enumerate funding rows for a session.
+func (r *ReservationRepo) SetLiveStreamID(ctx context.Context, workID uuid.UUID, liveStreamID uuid.UUID) error {
+	_, err := r.pool.Exec(ctx,
+		`UPDATE usage_reservations SET live_stream_id = $2 WHERE work_id = $1`,
+		workID, liveStreamID)
+	return err
+}
+
 // SetWebhookSecret stores the per-job HMAC secret used to verify
 // incoming runner webhooks against this reservation.
 func (r *ReservationRepo) SetWebhookSecret(ctx context.Context, workID uuid.UUID, secret string) error {

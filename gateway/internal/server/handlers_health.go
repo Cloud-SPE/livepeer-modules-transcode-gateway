@@ -80,6 +80,19 @@ func RegisterHealth(api huma.API, deps Deps) {
 		rState.LatencyMs = time.Since(t).Milliseconds()
 		out.Body.Checks["registry"] = rState
 
+		// rtmp ingress (plan 0003). Status "skipped" when LIVE_RTMP_PORT=0;
+		// "ok" when the listener is bound; "error" when the listener
+		// reports closed/closing.
+		rtmpState := HealthCheck{Status: "skipped"}
+		if deps.RTMPProbe != nil {
+			if deps.RTMPProbe.Listening() {
+				rtmpState = HealthCheck{Status: "ok"}
+			} else {
+				rtmpState = HealthCheck{Status: "error", Error: "listener closed"}
+			}
+		}
+		out.Body.Checks["rtmp"] = rtmpState
+
 		switch {
 		case dbState.Status == "error":
 			out.Body.Status = "down"

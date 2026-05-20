@@ -17,7 +17,7 @@ import { api } from '/lib/api.js';
 const KEY_STORAGE      = 'lvp_video_api_key';
 const UPLOADS_STORAGE  = 'lvp_video_uploads';
 const ABR_CAP_NAME     = 'video:transcode.abr';
-const LIVE_CAP_NAME    = 'video:live.rtmp';
+const LIVE_CAP_NAME    = 'video:transcode.live';
 
 class CcPlayground extends LitElement {
   static properties = {

@@ -585,6 +585,7 @@ type AdminLiveStreamView struct {
 	APIKeyID        uuid.UUID  `json:"api_key_id"`
 	Name            string     `json:"name,omitempty"`
 	Status          string     `json:"status"`
+	IngestMode      string     `json:"ingest_mode,omitempty"`
 	Capability      string     `json:"capability"`
 	Offering        string     `json:"offering"`
 	BrokerURL       string     `json:"broker_url,omitempty"`

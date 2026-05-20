@@ -49,7 +49,31 @@ type Config struct {
 	RefreshInterval time.Duration // derived
 
 	ABRCapability  string `env:"ABR_CAPABILITY" envDefault:"video:transcode.abr"`
-	LiveCapability string `env:"LIVE_CAPABILITY" envDefault:"video:live.rtmp"`
+	// LiveCapability is the on-chain capability id for live transcode.
+	// Orchs advertise it with offering = LiveGatewayIngestOffering for the
+	// live-session-gateway-ingest@v0 mode. See
+	// livepeer-network-protocol/modes/live-session-gateway-ingest.md.
+	LiveCapability string `env:"LIVE_CAPABILITY" envDefault:"video:transcode.live"`
+	// LiveGatewayIngestOffering is the offering label orchestrators
+	// advertise when serving the gateway-ingest mode. Spec default is
+	// "gateway-ingest" — change only if your orchestrator network uses
+	// a different label.
+	LiveGatewayIngestOffering string `env:"LIVE_GATEWAY_INGEST_OFFERING" envDefault:"gateway-ingest"`
+
+	// Live (live-session-remote-runner@v0) tuning. All four are
+	// configurable per the runner team's plan; defaults match the spec.
+	LiveIdleTimeoutSecs        int `env:"LIVE_IDLE_TIMEOUT_SECS" envDefault:"120"`
+	LiveReconcileIntervalSecs  int `env:"LIVE_RECONCILE_INTERVAL_SECS" envDefault:"30"`
+	LiveTopupRunwayThresholdSecs int `env:"LIVE_TOPUP_RUNWAY_THRESHOLD_SECS" envDefault:"60"`
+	LiveTopupFundSecs          int `env:"LIVE_TOPUP_FUND_SECS" envDefault:"60"`
+
+	// live-session-gateway-ingest@v0 (plan 0003). When LiveRTMPPort > 0
+	// the gateway runs an RTMP server on that port and accepts ingest
+	// from customers. LivePlaybackBaseURL is the public root for HLS
+	// playback (S3 / CDN) — used to build customer-facing URLs.
+	LiveRTMPPort            int    `env:"LIVE_RTMP_PORT" envDefault:"0"`
+	LivePlaybackBaseURL     string `env:"LIVE_PLAYBACK_BASE_URL"`
+	LiveS3CredentialTTLHrs  int    `env:"LIVE_S3_CREDENTIAL_TTL_HOURS" envDefault:"4"`
 
 	V1RateLimitPerMinute int `env:"V1_RATE_LIMIT_PER_MINUTE" envDefault:"60"`
 	V1RateLimitBurst     int `env:"V1_RATE_LIMIT_BURST" envDefault:"30"`

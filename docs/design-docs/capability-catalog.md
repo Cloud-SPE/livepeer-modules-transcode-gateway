@@ -71,10 +71,10 @@ never blocks on this; it reads `WHERE active=true` from the table.
       "constraints": { … }
     },
     {
-      "id": "livepeer:transcode/live-rtmp-hls-abr:default",
-      "capability": "livepeer:transcode/live-rtmp-hls-abr",
+      "id": "video:transcode.live:default",
+      "capability": "video:transcode.live",
       "offering": "default",
-      "interaction_mode": "rtmp-ingress-hls-egress@v0",
+      "interaction_mode": "live-session-remote-runner@v0",
       "name": "Live RTMP→HLS ABR",
       "category": "live",
       "price_per_work_unit_wei": "2000000000",

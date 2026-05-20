@@ -176,7 +176,27 @@ services:
       LIVEPEER_RESOLVER_SOCKET: ${LIVEPEER_RESOLVER_SOCKET:-/var/run/livepeer/service-registry.sock}
       REGISTRY_REFRESH_INTERVAL_MS: ${REGISTRY_REFRESH_INTERVAL_MS:-60000}
       ABR_CAPABILITY: ${ABR_CAPABILITY:-video:transcode.abr}
-      LIVE_CAPABILITY: ${LIVE_CAPABILITY:-video:live.rtmp}
+      LIVE_CAPABILITY: ${LIVE_CAPABILITY:-video:transcode.live}
+      # Offering label orchs advertise for the live-session-gateway-ingest@v0
+      # mode under capability video:transcode.live.
+      LIVE_GATEWAY_INGEST_OFFERING: ${LIVE_GATEWAY_INGEST_OFFERING:-gateway-ingest}
+
+      # ── live-session-remote-runner@v0 tuning ──
+      # Defaults match the runner team's approved values; override via
+      # .env for per-deployment policy. Set LIVE_RECONCILE_INTERVAL_SECS=0
+      # to disable the background reconciler (on-GET reconciliation in
+      # handlers_v1.go still applies in that mode).
+      LIVE_IDLE_TIMEOUT_SECS: ${LIVE_IDLE_TIMEOUT_SECS:-120}
+      LIVE_RECONCILE_INTERVAL_SECS: ${LIVE_RECONCILE_INTERVAL_SECS:-30}
+      LIVE_TOPUP_RUNWAY_THRESHOLD_SECS: ${LIVE_TOPUP_RUNWAY_THRESHOLD_SECS:-60}
+      LIVE_TOPUP_FUND_SECS: ${LIVE_TOPUP_FUND_SECS:-60}
+
+      # ── live-session-gateway-ingest@v0 (plan 0003) ──
+      # Gateway-owned RTMP ingest. Set LIVE_RTMP_PORT to a non-zero
+      # value to enable the listener (and publish the port below).
+      LIVE_RTMP_PORT: ${LIVE_RTMP_PORT:-0}
+      LIVE_PLAYBACK_BASE_URL: ${LIVE_PLAYBACK_BASE_URL:-}
+      LIVE_S3_CREDENTIAL_TTL_HOURS: ${LIVE_S3_CREDENTIAL_TTL_HOURS:-4}
 
       # ── /v1/* rate limit ──
       V1_RATE_LIMIT_PER_MINUTE: ${V1_RATE_LIMIT_PER_MINUTE:-60}
@@ -185,10 +205,16 @@ services:
       - livepeer-run:/var/run/livepeer
     ports:
       - "${GATEWAY_HOST_PORT:-4000}:4000"
+      # RTMP ingest port for live-session-gateway-ingest@v0 (plan 0003).
+      # Published only when LIVE_RTMP_PORT is non-zero. Docker requires a
+      # static port mapping at compose-parse time; this maps host:1935 ↔
+      # container:1935 by default. If you want a different host port,
+      # override LIVE_RTMP_HOST_PORT.
+      - "${LIVE_RTMP_HOST_PORT:-1935}:${LIVE_RTMP_PORT:-1935}"
     restart: unless-stopped
 
   service-registry-daemon:
-    image: tztcloud/livepeer-service-registry-daemon:${LIVEPEER_REGISTRY_DAEMON_TAG:-v1.3.0}
+    image: tztcloud/livepeer-service-registry-daemon:${LIVEPEER_REGISTRY_DAEMON_TAG:-v1.3.1}
     container_name: video-gateway-resolver
     profiles: [livepeer]
     restart: unless-stopped

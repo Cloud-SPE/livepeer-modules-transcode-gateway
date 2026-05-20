@@ -29,7 +29,7 @@ reports actual work).
 ```
 client → POST /v1/live
   gateway opens long-lived usage_reservations + live_streams (status='provisioning')
-  gateway calls Resolver.SelectMany(capability=livepeer:transcode/live-rtmp-hls-abr)
+  gateway calls Resolver.SelectMany(capability=video:transcode.live)
   pick top candidate (no failover on session-open — live can't retry mid-handshake)
   gateway calls PayerDaemon.CreatePayment(face_value, …) with face_value
     sized for the session's estimated initial budget

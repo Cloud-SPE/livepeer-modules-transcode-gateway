@@ -21,6 +21,7 @@ import (
 	"github.com/Cloud-SPE/livepeer-modules-transcode-gateway/gateway/internal/proxy/service"
 	"github.com/Cloud-SPE/livepeer-modules-transcode-gateway/gateway/internal/registry"
 	"github.com/Cloud-SPE/livepeer-modules-transcode-gateway/gateway/internal/repo"
+	"github.com/Cloud-SPE/livepeer-modules-transcode-gateway/gateway/internal/rtmp"
 	"github.com/Cloud-SPE/livepeer-modules-transcode-gateway/gateway/internal/s3"
 	"github.com/Cloud-SPE/livepeer-modules-transcode-gateway/gateway/internal/server"
 )
@@ -98,6 +99,8 @@ func run() error {
 		[]string{cfg.ABRCapability, cfg.LiveCapability}, log)
 	go refresher.Start(ctx)
 
+	// Live-session reconciler + auto-topup engine. Started below after
+	// deps are constructed so it can share the same HTTP client + repos.
 	deps := server.Deps{
 		Cfg:      cfg,
 		Log:      log,
@@ -117,6 +120,28 @@ func run() error {
 		CapMap:   livepeer.NewDefault(cfg.ABRCapability, cfg.LiveCapability),
 		Metrics:  met,
 	}
+
+	// Background reconciler for live sessions. Polls broker state for
+	// active sessions and auto-tops-up when runway runs low. Disabled
+	// when LIVE_RECONCILE_INTERVAL_SECS=0.
+	liveReconciler := server.NewLiveReconciler(deps)
+	go liveReconciler.Run(ctx)
+
+	// RTMP server for live-session-gateway-ingest@v0. Bound only when
+	// LIVE_RTMP_PORT > 0 (plan 0003). Disabled by default until upstream
+	// broker / runner support lands.
+	rtmpSrv := rtmp.New(rtmp.Deps{
+		Log:    log,
+		Auth:   &rtmp.RepoAuthenticator{Live: live},
+		Pepper: cfg.IPHashPepper,
+	}, cfg.Host, cfg.LiveRTMPPort)
+	go func() {
+		if err := rtmpSrv.Run(ctx); err != nil {
+			log.Error("rtmp server exited", "err", err)
+		}
+	}()
+	deps.RTMPProbe = rtmpSrv
+	met.AttachRTMPGauge(rtmpSrv.ActivePublishes)
 
 	srv := &http.Server{
 		Addr:         net.JoinHostPort(cfg.Host, strconv.Itoa(cfg.Port)),
