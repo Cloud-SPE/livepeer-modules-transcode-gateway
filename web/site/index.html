@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Livepeer Video Gateway — ABR + RTMP→HLS transcode on the Livepeer network</title>
+  <meta name="description" content="VOD ABR ladder transcoding and live RTMP→HLS streaming, backed by the Livepeer decentralized GPU network. Free during beta.">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Ctext y='20' font-size='20'%3E📺%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/index.css">
+  <script type="importmap">
+    {
+      "imports": {
+        "lit": "https://esm.sh/lit@3.2.0",
+        "lit/decorators.js": "https://esm.sh/lit@3.2.0/decorators.js"
+      }
+    }
+  </script>
+</head>
+<body>
+  <header class="topbar">
+    <h1 class="brand">Livepeer Video Gateway</h1>
+    <nav>
+      <a href="/portal/" class="nav-link">Portal</a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="hero">
+      <h2>Transcode video on the Livepeer network.</h2>
+      <p class="lead">VOD ABR ladder transcoding and live RTMP→HLS streaming. Free during beta.</p>
+      <pre class="code"><code># VOD ABR ladder
+curl https://api.example.com/v1/abr \
+  -H "Authorization: Bearer sk-..." \
+  -H "Content-Type: application/json" \
+  -d '{"input_url":"https://example.com/source.mp4"}'
+
+# Live RTMP→HLS
+curl https://api.example.com/v1/live \
+  -H "Authorization: Bearer sk-..." \
+  -X POST</code></pre>
+    </section>
+
+    <section class="signup">
+      <h3>Request access</h3>
+      <p>Sign up to the waitlist. We email a verification link; once verified, an admin reviews your signup and emails an API key.</p>
+      <cc-signup-form></cc-signup-form>
+    </section>
+
+    <section class="endpoints">
+      <h3>API surface</h3>
+      <ul>
+        <li><code>POST /v1/abr</code> — VOD ABR ladder transcode</li>
+        <li><code>POST /v1/abr/upload-url</code> — presigned RustFS PUT for VOD ingest</li>
+        <li><code>POST /v1/live</code> — allocate an RTMP ingest + HLS egress session</li>
+        <li><code>GET /v1/live/:id</code> — live session status</li>
+        <li><code>DELETE /v1/live/:id</code> — close a live session</li>
+        <li><code>GET /v1/capabilities</code> — registry-backed transcode catalog</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer>
+    <p>Backed by the <a href="https://livepeer.org">Livepeer</a> decentralized GPU network.</p>
+  </footer>
+
+  <script type="module" src="/components/cc-signup-form.js"></script>
+</body>
+</html>

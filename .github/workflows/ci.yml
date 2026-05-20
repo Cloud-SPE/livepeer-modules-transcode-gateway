@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  go:
+    name: Go (gateway)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache-dependency-path: gateway/go.sum
+
+      - name: go vet
+        working-directory: gateway
+        run: go vet ./...
+
+      - name: go build
+        working-directory: gateway
+        run: go build ./...
+
+      - name: go test
+        working-directory: gateway
+        run: go test ./...
+
+  web:
+    name: Web (site + portal + admin)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'pnpm'
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm -r build
+
+  docs:
+    name: Docs (cross-link)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check AGENTS.md targets exist
+        run: |
+          grep -oE '\]\(\./[^)]+\)' AGENTS.md | sed -E 's|\]\(\./([^)]+)\)|\1|' | while read -r path; do
+            if [ ! -e "$path" ]; then
+              echo "::error file=AGENTS.md::broken link: $path"
+              exit 1
+            fi
+          done
+
+  docker:
+    name: Docker build (gateway)
+    runs-on: ubuntu-latest
+    if: false  # enable once gateway/Dockerfile is final
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t livepeer-video-gateway:ci gateway/

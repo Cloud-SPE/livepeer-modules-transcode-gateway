@@ -1,0 +1,246 @@
+# Livepeer Video Gateway — root compose.
+#
+# Default `docker compose up` brings up:
+#   - db                 (postgres:16-alpine)
+#   - rustfs             (S3-compatible object store for VOD ingest)
+#   - rustfs-bootstrap   (one-shot: waits for rustfs, creates bucket + access key)
+#   - gateway            (build from ./gateway/Dockerfile)
+#
+# The two Livepeer daemons live behind the `livepeer` profile. The
+# gateway boots fine without them (`/v1/*` returns 503 until they're
+# reachable). Bring them up with:
+#   docker compose --profile livepeer up -d
+#
+# Capability workers (abr-runner, transcode-runner, capability-broker)
+# are external to this repository. The gateway expects on-chain
+# capability providers by default.
+#
+# The three Lit SPAs run independently via `node dev-server.js` in
+# each web/ subdir; they're not in this stack.
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: video-gateway-db
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-video_gateway}
+      POSTGRES_USER: ${POSTGRES_USER:-video_gateway}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres-dev-password}
+    volumes:
+      - video-gateway-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-video_gateway}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    ports:
+      - "${POSTGRES_HOST_PORT:-5432}:5432"
+
+  rustfs:
+    image: rustfs/rustfs:${RUSTFS_IMAGE_TAG:-latest}
+    container_name: video-gateway-rustfs
+    environment:
+      RUSTFS_ROOT_USER: ${RUSTFS_ROOT_USER:-rustfs_root}
+      RUSTFS_ROOT_PASSWORD: ${RUSTFS_ROOT_PASSWORD:-rustfs-dev-password}
+      RUSTFS_ADDRESS: ":9000"
+      RUSTFS_CONSOLE_ADDRESS: ":9001"
+    volumes:
+      - video-gateway-rustfs-data:/data
+    ports:
+      - "${RUSTFS_HOST_PORT:-9000}:9000"
+      - "${RUSTFS_CONSOLE_PORT:-9001}:9001"
+    healthcheck:
+      # RustFS doesn't expose /minio/health/ready; any HTTP response
+      # (including S3's 403-on-unauth) proves the listener is up.
+      test: ["CMD-SHELL", "wget -q --spider --server-response http://localhost:9000/ 2>&1 | grep -E 'HTTP/' >/dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    command: ["rustfs", "server", "/data"]
+
+  rustfs-bootstrap:
+    image: minio/mc:latest
+    container_name: video-gateway-rustfs-bootstrap
+    depends_on:
+      rustfs:
+        condition: service_healthy
+    environment:
+      RUSTFS_ROOT_USER: ${RUSTFS_ROOT_USER:-rustfs_root}
+      RUSTFS_ROOT_PASSWORD: ${RUSTFS_ROOT_PASSWORD:-rustfs-dev-password}
+      S3_BUCKET: ${S3_BUCKET:-lvp-video-ingest}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-video-gateway}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-video-gateway-dev-secret}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        mc alias set rustfs http://rustfs:9000 "$$RUSTFS_ROOT_USER" "$$RUSTFS_ROOT_PASSWORD"
+        mc mb --ignore-existing rustfs/$$S3_BUCKET
+        mc anonymous set download rustfs/$$S3_BUCKET || true
+        if ! mc admin user info rustfs "$$S3_ACCESS_KEY_ID" >/dev/null 2>&1; then
+          mc admin user add rustfs "$$S3_ACCESS_KEY_ID" "$$S3_SECRET_ACCESS_KEY"
+        fi
+        mc admin policy attach rustfs readwrite --user "$$S3_ACCESS_KEY_ID" || true
+        echo "rustfs-bootstrap: bucket $$S3_BUCKET ready, access key $$S3_ACCESS_KEY_ID provisioned"
+    restart: "no"
+
+  rustfs-cors:
+    # CORS lives on the standard S3 API surface (not in mc), so we apply
+    # it with the AWS CLI. Browsers PUT directly to RustFS from the
+    # portal/admin SPAs, so the allowed origins mirror the dev ports.
+    image: amazon/aws-cli:latest
+    container_name: video-gateway-rustfs-cors
+    depends_on:
+      rustfs-bootstrap:
+        condition: service_completed_successfully
+    environment:
+      AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-video-gateway}
+      AWS_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-video-gateway-dev-secret}
+      AWS_DEFAULT_REGION: ${S3_REGION:-us-east-1}
+      S3_BUCKET: ${S3_BUCKET:-lvp-video-ingest}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:3001,http://localhost:3002}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        ORIGINS=$$(echo "$$CORS_ALLOWED_ORIGINS" | awk -F, '{for(i=1;i<=NF;i++) printf "\"%s\"%s", $$i, (i<NF?",":"")}')
+        cat > /tmp/cors.json <<JSON
+        {
+          "CORSRules": [
+            {
+              "AllowedOrigins": [$$ORIGINS],
+              "AllowedMethods": ["PUT", "GET", "HEAD"],
+              "AllowedHeaders": ["*"],
+              "ExposeHeaders": ["ETag", "x-amz-request-id"],
+              "MaxAgeSeconds": 3000
+            }
+          ]
+        }
+        JSON
+        aws --endpoint-url http://rustfs:9000 s3api put-bucket-cors \
+          --bucket "$$S3_BUCKET" --cors-configuration file:///tmp/cors.json
+        echo "rustfs-cors: CORS applied to $$S3_BUCKET for origins: $$CORS_ALLOWED_ORIGINS"
+    restart: "no"
+
+  gateway:
+    build:
+      context: .
+      dockerfile: gateway/Dockerfile
+    image: livepeer-video-gateway:${GATEWAY_TAG:-dev}
+    container_name: video-gateway
+    depends_on:
+      db:
+        condition: service_healthy
+      rustfs-bootstrap:
+        condition: service_completed_successfully
+      rustfs-cors:
+        condition: service_completed_successfully
+    environment:
+      # ── server ──
+      PORT: "4000"
+      HOST: "0.0.0.0"
+      BASE_URL: ${BASE_URL:-http://localhost:4000}
+      GATEWAY_PUBLIC_URL: ${GATEWAY_PUBLIC_URL:-}
+      PUBLIC_SITE_URL: ${PUBLIC_SITE_URL:-http://localhost:3000}
+      PUBLIC_PORTAL_URL: ${PUBLIC_PORTAL_URL:-http://localhost:3001}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-*}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+
+      # ── data ──
+      DATABASE_URL: postgres://${POSTGRES_USER:-video_gateway}:${POSTGRES_PASSWORD:-postgres-dev-password}@db:5432/${POSTGRES_DB:-video_gateway}?sslmode=disable
+
+      # ── SaaS shell auth ──
+      ADMIN_TOKEN: ${ADMIN_TOKEN:-}
+      API_KEY_HASH_PEPPER: ${API_KEY_HASH_PEPPER:-}
+      IP_HASH_PEPPER: ${IP_HASH_PEPPER:-}
+      METRICS_TOKEN: ${METRICS_TOKEN:-}
+      SESSION_TTL_HOURS: ${SESSION_TTL_HOURS:-24}
+
+      # ── email (optional) ──
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      FROM_EMAIL: ${FROM_EMAIL:-Livepeer Video Gateway <noreply@example.com>}
+
+      # ── object store ──
+      S3_REGION: ${S3_REGION:-us-east-1}
+      S3_BUCKET: ${S3_BUCKET:-lvp-video-ingest}
+      S3_ENDPOINT: ${S3_ENDPOINT:-http://rustfs:9000}
+      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-http://localhost:9000}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-video-gateway}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-video-gateway-dev-secret}
+      S3_PRESIGN_TTL_SECONDS: ${S3_PRESIGN_TTL_SECONDS:-3600}
+
+      # ── Livepeer plumbing ──
+      LIVEPEER_PAYER_DAEMON_SOCKET: /var/run/livepeer/payer-daemon.sock
+      LIVEPEER_RESOLVER_SOCKET: ${LIVEPEER_RESOLVER_SOCKET:-/var/run/livepeer/service-registry.sock}
+      REGISTRY_REFRESH_INTERVAL_MS: ${REGISTRY_REFRESH_INTERVAL_MS:-60000}
+      ABR_CAPABILITY: ${ABR_CAPABILITY:-video:transcode.abr}
+      LIVE_CAPABILITY: ${LIVE_CAPABILITY:-video:live.rtmp}
+
+      # ── /v1/* rate limit ──
+      V1_RATE_LIMIT_PER_MINUTE: ${V1_RATE_LIMIT_PER_MINUTE:-60}
+      V1_RATE_LIMIT_BURST: ${V1_RATE_LIMIT_BURST:-30}
+    volumes:
+      - livepeer-run:/var/run/livepeer
+    ports:
+      - "${GATEWAY_HOST_PORT:-4000}:4000"
+    restart: unless-stopped
+
+  service-registry-daemon:
+    image: tztcloud/livepeer-service-registry-daemon:${LIVEPEER_REGISTRY_DAEMON_TAG:-v1.3.0}
+    container_name: video-gateway-resolver
+    profiles: [livepeer]
+    restart: unless-stopped
+    environment:
+      CHAIN_RPC: ${CHAIN_RPC:-}
+      CHAIN_ID: ${CHAIN_ID:-42161}
+      LIVEPEER_RESOLVER_SOCKET: /var/run/livepeer/service-registry.sock
+    command:
+      - --mode=resolver
+      - --socket=/var/run/livepeer/service-registry.sock
+      - --store-path=/var/lib/livepeer/registry-cache.db
+      - --chain-rpc=${CHAIN_RPC:-}
+      - --chain-id=${CHAIN_ID:-42161}
+      - --controller-address=${CONTROLLER_ADDRESS:-0xD8E8328501E9645d16Cf49539efC04f734606ee4}
+      - --ai-service-registry-address=${AI_SERVICE_REGISTRY_ADDRESS:-}
+      - --discovery=chain
+      - --round-poll-interval=${ROUND_POLL_INTERVAL:-120s}
+      - --cache-manifest-ttl=${CACHE_MANIFEST_TTL:-5m}
+      - --manifest-max-bytes=${MANIFEST_MAX_BYTES:-1048576}
+      - --manifest-fetch-timeout=${MANIFEST_FETCH_TIMEOUT:-5s}
+      - --max-stale=${MAX_STALE:-30m}
+      - --reject-unsigned=true
+      - --log-level=${REGISTRY_LOG_LEVEL:-info}
+      - --log-format=${REGISTRY_LOG_FORMAT:-json}
+      - --metrics-listen=:${REGISTRY_METRICS_PORT:-9095}
+    volumes:
+      - livepeer-run:/var/run/livepeer
+      - video-gateway-registry-cache:/var/lib/livepeer
+
+  payer-daemon:
+    image: tztcloud/livepeer-payment-daemon:${LIVEPEER_PAYER_DAEMON_TAG:-v1.3.1}
+    container_name: video-gateway-payer
+    profiles: [livepeer]
+    restart: unless-stopped
+    environment:
+      CHAIN_RPC: ${CHAIN_RPC:-}
+      CHAIN_ID: ${CHAIN_ID:-42161}
+      LIVEPEER_PAYER_SOCKET: /var/run/livepeer/payer-daemon.sock
+      LIVEPEER_PAYER_KEYSTORE_PATH: /etc/livepeer/keystore.json
+      LIVEPEER_PAYER_KEYSTORE_PASSWORD_FILE: /etc/livepeer/keystore-password
+    command:
+      - --mode=sender
+      - --socket=/var/run/livepeer/payer-daemon.sock
+      - --chain-rpc=${CHAIN_RPC:-}
+      - --keystore-path=/etc/livepeer/keystore.json
+      - --keystore-password-file=/etc/livepeer/keystore-password
+    volumes:
+      - livepeer-run:/var/run/livepeer
+      - ${LIVEPEER_KEYSTORE_DIR:-./.dev/keystore}:/etc/livepeer:ro
+
+volumes:
+  video-gateway-pgdata:
+  video-gateway-rustfs-data:
+  video-gateway-registry-cache:
+  livepeer-run:

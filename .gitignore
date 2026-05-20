@@ -1,0 +1,51 @@
+# node (web/*)
+node_modules/
+.pnpm-store/
+dist/
+dist-test/
+*.tsbuildinfo
+.npm/
+
+# go
+gateway/bin/
+gateway/gateway
+*.exe
+*.test
+*.out
+coverage.out
+
+# generated code (sqlc + protoc) — kept checked in so the gateway
+# builds standalone without needing the sibling proto-contracts repo.
+# Regenerate with `make proto` if proto files change.
+
+# env + local-only secrets
+.env
+.env.local
+.env.*.local
+!.env.example
+.dev/
+*.local
+
+# rustfs local data
+.rustfs/
+
+# compose runtime
+livepeer-run/
+
+# editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*.swo~
+*~
+.DS_Store
+Thumbs.db
+
+# logs
+*.log
+npm-debug.log*
+
+# generated docs
+docs/generated/*
+!docs/generated/.gitkeep

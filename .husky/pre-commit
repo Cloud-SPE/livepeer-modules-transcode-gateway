@@ -1,0 +1,22 @@
+#!/usr/bin/env sh
+# Pre-commit hook — keep cheap. Heavier checks live in CI.
+#
+# - Check that no link in AGENTS.md points to a missing file.
+# - Run `go vet ./...` if a Go source changed and the toolchain is present.
+
+set -e
+
+if [ -f AGENTS.md ]; then
+  grep -oE '\]\(\./[^)]+\)' AGENTS.md | sed -E 's|\]\(\./([^)]+)\)|\1|' | while read -r path; do
+    if [ ! -e "$path" ]; then
+      echo "pre-commit: broken AGENTS.md link → $path" >&2
+      exit 1
+    fi
+  done
+fi
+
+if git diff --cached --name-only | grep -q '^gateway/.*\.go$'; then
+  if command -v go >/dev/null 2>&1 && [ -f gateway/go.mod ]; then
+    (cd gateway && go vet ./...)
+  fi
+fi

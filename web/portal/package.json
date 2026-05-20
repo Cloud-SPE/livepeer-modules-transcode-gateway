@@ -1,0 +1,12 @@
+{
+  "name": "@livepeer-modules-transcode-gateway/portal",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node dev-server.js",
+    "lint": "echo 'no build step — zero-build Lit + esm.sh'",
+    "build": "echo 'no build step — zero-build Lit + esm.sh'",
+    "test": "echo 'no tests'"
+  }
+}
