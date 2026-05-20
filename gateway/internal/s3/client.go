@@ -134,8 +134,13 @@ func (c *Client) MintLiveSessionCredentials(keyPrefix string, ttl time.Duration)
 		KeyPrefix:       strings.TrimRight(keyPrefix, "/"),
 		AccessKeyID:     c.accessKeyID,
 		SecretAccessKey: c.secretAccessKey,
-		SessionToken:    "", // empty until STS
-		ExpiresAt:       time.Now().Add(ttl),
+		// RustFS doesn't expose STS / AssumeRole, so there's no real
+		// session token to vend. The broker rejects empty session_token,
+		// so we send a sentinel that's syntactically valid but
+		// semantically meaningless. The runner uses the access_key_id
+		// + secret_access_key (static) and ignores this field.
+		SessionToken: "static-credentials-no-sts",
+		ExpiresAt:    time.Now().Add(ttl),
 	}, nil
 }
 

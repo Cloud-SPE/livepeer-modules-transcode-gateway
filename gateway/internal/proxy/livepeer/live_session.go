@@ -136,7 +136,7 @@ type LiveOutputCredential struct {
 	KeyPrefix       string `json:"key_prefix"`
 	AccessKeyID     string `json:"access_key_id"`
 	SecretAccessKey string `json:"secret_access_key"`
-	SessionToken    string `json:"session_token,omitempty"`
+	SessionToken    string `json:"session_token"`
 	ExpiresAt       string `json:"expires_at"`
 }
 
