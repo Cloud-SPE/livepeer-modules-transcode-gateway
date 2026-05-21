@@ -48,6 +48,11 @@ func New(deps Deps) http.Handler {
 	// untouched bytes, and huma's body parsing would re-marshal).
 	MountCallbacks(r, deps)
 
+	// Embedded SPAs — site at /, portal at /portal/, admin at /admin/.
+	// Falls back to 404 for /api/* paths chi didn't otherwise match so
+	// callers see proper "endpoint not found" instead of an HTML page.
+	mountSPAs(r)
+
 	return r
 }
 

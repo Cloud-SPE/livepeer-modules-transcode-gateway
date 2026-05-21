@@ -1,5 +1,5 @@
 import { LitElement, html } from 'lit';
-import { api } from '/lib/api.js';
+import { api } from '../lib/api.js';
 
 // Transcode-specific: RTMP→HLS sessions across all users. Defaults to
 // active sessions only; toggle to see history.

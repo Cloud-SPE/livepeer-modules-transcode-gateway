@@ -1,5 +1,5 @@
 import { LitElement, html } from 'lit';
-import { api } from '/lib/api.js';
+import { api } from '../lib/api.js';
 
 // Users list + per-user drilldown. Click "Detail" to load the user's
 // API keys + aggregate usage from /admin/users/{id}.

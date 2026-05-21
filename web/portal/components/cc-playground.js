@@ -1,6 +1,6 @@
 import { LitElement, html } from 'lit';
 import Hls from 'hls.js';
-import { api } from '/lib/api.js';
+import { api } from '../lib/api.js';
 
 // Two tabs: Live RTMP→HLS stream + VOD ABR ladder.
 //

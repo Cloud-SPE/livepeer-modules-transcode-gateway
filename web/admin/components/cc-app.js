@@ -1,5 +1,5 @@
 import { LitElement, html } from 'lit';
-import { getToken, api } from '/lib/api.js';
+import { getToken, api } from '../lib/api.js';
 
 import './cc-token-prompt.js';
 import './cc-waitlist-queue.js';

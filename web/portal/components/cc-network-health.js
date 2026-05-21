@@ -1,5 +1,5 @@
 import { LitElement, html } from 'lit';
-import { api } from '/lib/api.js';
+import { api } from '../lib/api.js';
 
 class CcNetworkHealth extends LitElement {
   static properties = {

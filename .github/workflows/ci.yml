@@ -20,6 +20,14 @@ jobs:
           go-version: '1.25'
           cache-dependency-path: gateway/go.sum
 
+      # The gateway embeds the three SPAs via //go:embed all:webroot.
+      # `make embed-webroot` populates that directory before any go
+      # command runs — without it, embed.go sees an empty dir and the
+      # SPAs serve 404 (the binary still compiles, but tests would
+      # exercise an unrealistic surface).
+      - name: Embed SPAs into webroot
+        run: make embed-webroot
+
       - name: go vet
         working-directory: gateway
         run: go vet ./...

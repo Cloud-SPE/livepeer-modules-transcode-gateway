@@ -49,3 +49,10 @@ npm-debug.log*
 # generated docs
 docs/generated/*
 !docs/generated/.gitkeep
+
+# Embedded SPA webroot — populated by `make embed-webroot` (or the
+# Dockerfile during image build). Only .gitkeep is committed so the
+# embed directive in gateway/internal/server/embed.go always finds the
+# directory.
+gateway/internal/server/webroot/*
+!gateway/internal/server/webroot/.gitkeep

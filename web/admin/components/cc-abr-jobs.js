@@ -1,5 +1,5 @@
 import { LitElement, html } from 'lit';
-import { api } from '/lib/api.js';
+import { api } from '../lib/api.js';
 
 // Transcode-specific: recent ABR ladder jobs across all users. Refunded
 // jobs are the operator's biggest signal — they mean the broker took

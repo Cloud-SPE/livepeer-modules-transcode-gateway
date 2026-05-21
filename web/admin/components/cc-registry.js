@@ -1,5 +1,5 @@
 import { LitElement, html } from 'lit';
-import { api } from '/lib/api.js';
+import { api } from '../lib/api.js';
 
 // Four-panel registry diagnostic:
 //   1. Summary       — cache freshness + capability filter + counts

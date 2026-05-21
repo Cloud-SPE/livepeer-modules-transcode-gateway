@@ -1,5 +1,5 @@
 import { LitElement, html } from 'lit';
-import { api } from '/lib/api.js';
+import { api } from '../lib/api.js';
 
 // Server-side history of ABR ladder transcode jobs the user has
 // submitted. Complements the Playground's localStorage list — this

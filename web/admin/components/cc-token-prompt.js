@@ -1,5 +1,5 @@
 import { LitElement, html } from 'lit';
-import { setToken } from '/lib/api.js';
+import { setToken } from '../lib/api.js';
 
 class CcTokenPrompt extends LitElement {
   createRenderRoot() { return this; }

@@ -1,6 +1,6 @@
 import { LitElement, html } from 'lit';
 import Hls from 'hls.js';
-import { api } from '/lib/api.js';
+import { api } from '../lib/api.js';
 
 // Portal-side history of the user's RTMP→HLS sessions. Server-side
 // state — survives clearing localStorage. Playback URLs are live for

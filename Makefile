@@ -15,7 +15,7 @@ TAG   ?= dev
 
 .PHONY: help install build lint test dev down logs clean smoke web site-ui portal-ui admin-ui \
         go-build go-test go-lint go-tidy proto sqlc \
-        docker-build docker-publish
+        docker-build docker-publish embed-webroot
 
 help:
 	@echo "Livepeer Video Gateway — root targets"
@@ -25,7 +25,7 @@ help:
 	@echo "  make lint           go vet + pnpm -r lint"
 	@echo "  make test           go test + pnpm -r test"
 	@echo ""
-	@echo "  make dev            bring up gateway + db + rustfs via docker compose"
+	@echo "  make dev            bring up gateway + db + minio via docker compose"
 	@echo "  make dev-livepeer   same as dev, plus payer + resolver daemons"
 	@echo "  make down           tear down dev compose stack"
 	@echo "  make logs           tail dev compose logs"
@@ -64,7 +64,7 @@ test: go-test
 	pnpm -r test
 
 dev:
-	docker compose up -d db rustfs rustfs-bootstrap rustfs-cors gateway
+	docker compose up -d db minio minio-bootstrap gateway
 
 dev-livepeer:
 	docker compose --profile livepeer up -d
@@ -94,8 +94,29 @@ portal-ui:
 admin-ui:
 	cd web/admin && node dev-server.js
 
-go-build:
+go-build: embed-webroot
 	cd gateway && go build -o bin/gateway ./cmd/gateway
+
+# embed-webroot populates gateway/internal/server/webroot/ with copies
+# of the three SPAs so the //go:embed directive in embed.go bakes them
+# into the gateway binary at build time. Idempotent; safe to run before
+# every build. .gitignored content — fresh clones don't have to clean.
+embed-webroot:
+	@mkdir -p gateway/internal/server/webroot
+	@rm -rf gateway/internal/server/webroot/site \
+	        gateway/internal/server/webroot/portal \
+	        gateway/internal/server/webroot/admin
+	cp -r web/site   gateway/internal/server/webroot/site
+	cp -r web/portal gateway/internal/server/webroot/portal
+	cp -r web/admin  gateway/internal/server/webroot/admin
+	@# strip dev-only files so they aren't shipped in the binary
+	@rm -f gateway/internal/server/webroot/site/dev-server.js \
+	       gateway/internal/server/webroot/site/package.json \
+	       gateway/internal/server/webroot/portal/dev-server.js \
+	       gateway/internal/server/webroot/portal/package.json \
+	       gateway/internal/server/webroot/admin/dev-server.js \
+	       gateway/internal/server/webroot/admin/package.json
+	@echo "embed-webroot: webroot/ populated with site, portal, admin"
 
 go-test:
 	cd gateway && go test ./...
