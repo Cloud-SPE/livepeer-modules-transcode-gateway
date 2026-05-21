@@ -22,11 +22,11 @@ import (
 // verification (huma's body parsing would re-marshal and break the
 // signature).
 //
-// Path: POST /api/abr/callback?work_id=<uuid>
+// Path: POST /api/webhooks/abr?work_id=<uuid>
 // Auth: HMAC-SHA256 over (timestamp + "." + body) using the per-job
 //       secret stored on the reservation row.
 func MountCallbacks(r chi.Router, deps Deps) {
-	r.Post("/api/abr/callback", func(w http.ResponseWriter, req *http.Request) {
+	r.Post("/api/webhooks/abr", func(w http.ResponseWriter, req *http.Request) {
 		workIDStr := req.URL.Query().Get("work_id")
 		workID, err := uuid.Parse(workIDStr)
 		if err != nil {

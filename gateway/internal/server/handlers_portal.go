@@ -17,7 +17,7 @@ func RegisterPortal(api huma.API, deps Deps) {
 	huma.Register(api, huma.Operation{
 		OperationID: "portal-login",
 		Method:      http.MethodPost,
-		Path:        "/portal/login",
+		Path:        "/api/portal/login",
 		Summary:     "Trade an API key for a session cookie",
 		Tags:        []string{"portal"},
 	}, func(ctx context.Context, in *struct {
@@ -50,7 +50,7 @@ func RegisterPortal(api huma.API, deps Deps) {
 	huma.Register(api, huma.Operation{
 		OperationID: "portal-logout",
 		Method:      http.MethodPost,
-		Path:        "/portal/logout",
+		Path:        "/api/portal/logout",
 		Summary:     "Revoke the current session",
 		Tags:        []string{"portal"},
 	}, func(ctx context.Context, _ *struct{}) (*PortalLoginOut, error) {
@@ -68,7 +68,7 @@ func RegisterPortal(api huma.API, deps Deps) {
 	huma.Register(api, huma.Operation{
 		OperationID: "portal-account",
 		Method:      http.MethodGet,
-		Path:        "/portal/account",
+		Path:        "/api/portal/account",
 		Summary:     "Current portal account",
 		Tags:        []string{"portal"},
 	}, func(ctx context.Context, _ *struct{}) (*PortalAccountOut, error) {
@@ -88,7 +88,7 @@ func RegisterPortal(api huma.API, deps Deps) {
 	huma.Register(api, huma.Operation{
 		OperationID: "portal-list-keys",
 		Method:      http.MethodGet,
-		Path:        "/portal/api-keys",
+		Path:        "/api/portal/api-keys",
 		Summary:     "List my API keys",
 		Tags:        []string{"portal"},
 	}, func(ctx context.Context, _ *struct{}) (*PortalKeysOut, error) {
@@ -117,7 +117,7 @@ func RegisterPortal(api huma.API, deps Deps) {
 	huma.Register(api, huma.Operation{
 		OperationID: "portal-mint-key",
 		Method:      http.MethodPost,
-		Path:        "/portal/api-keys",
+		Path:        "/api/portal/api-keys",
 		Summary:     "Mint a new API key",
 		Tags:        []string{"portal"},
 	}, func(ctx context.Context, in *struct {
@@ -159,7 +159,7 @@ func RegisterPortal(api huma.API, deps Deps) {
 	huma.Register(api, huma.Operation{
 		OperationID: "portal-revoke-key",
 		Method:      http.MethodDelete,
-		Path:        "/portal/api-keys/{id}",
+		Path:        "/api/portal/api-keys/{id}",
 		Summary:     "Revoke an API key",
 		Tags:        []string{"portal"},
 	}, func(ctx context.Context, in *struct {
@@ -180,7 +180,7 @@ func RegisterPortal(api huma.API, deps Deps) {
 	huma.Register(api, huma.Operation{
 		OperationID: "portal-usage",
 		Method:      http.MethodGet,
-		Path:        "/portal/usage",
+		Path:        "/api/portal/usage",
 		Summary:     "Recent usage for my API keys",
 		Tags:        []string{"portal"},
 	}, func(ctx context.Context, in *struct {
@@ -215,7 +215,7 @@ func RegisterPortal(api huma.API, deps Deps) {
 	huma.Register(api, huma.Operation{
 		OperationID: "portal-live-streams",
 		Method:      http.MethodGet,
-		Path:        "/portal/live-streams",
+		Path:        "/api/portal/live-streams",
 		Summary:     "My RTMP→HLS sessions",
 		Tags:        []string{"portal"},
 	}, func(ctx context.Context, in *struct {
@@ -250,7 +250,7 @@ func RegisterPortal(api huma.API, deps Deps) {
 	huma.Register(api, huma.Operation{
 		OperationID: "portal-abr-jobs",
 		Method:      http.MethodGet,
-		Path:        "/portal/abr-jobs",
+		Path:        "/api/portal/abr-jobs",
 		Summary:     "My ABR ladder transcode jobs",
 		Tags:        []string{"portal"},
 	}, func(ctx context.Context, in *struct {

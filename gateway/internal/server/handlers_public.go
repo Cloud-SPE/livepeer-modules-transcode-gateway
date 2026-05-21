@@ -29,7 +29,7 @@ func RegisterPublic(api huma.API, deps Deps) {
 	huma.Register(api, huma.Operation{
 		OperationID: "waitlist-signup",
 		Method:      http.MethodPost,
-		Path:        "/api/waitlist",
+		Path:        "/api/public/waitlist",
 		Summary:     "Sign up to the waitlist",
 		Tags:        []string{"public"},
 	}, func(ctx context.Context, in *WaitlistSignupInput) (*GenericOK, error) {
@@ -58,7 +58,7 @@ func RegisterPublic(api huma.API, deps Deps) {
 	huma.Register(api, huma.Operation{
 		OperationID: "waitlist-verify",
 		Method:      http.MethodGet,
-		Path:        "/api/verify",
+		Path:        "/api/public/verify",
 		Summary:     "Verify a signup email",
 		Tags:        []string{"public"},
 	}, func(ctx context.Context, in *struct {

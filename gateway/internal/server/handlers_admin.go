@@ -18,7 +18,7 @@ func RegisterAdmin(api huma.API, deps Deps) {
 	huma.Register(api, huma.Operation{
 		OperationID: "admin-list-waitlist",
 		Method:      http.MethodGet,
-		Path:        "/admin/waitlist",
+		Path:        "/api/admin/waitlist",
 		Summary:     "List waitlist rows",
 		Tags:        []string{"admin"},
 	}, func(ctx context.Context, in *struct {
@@ -48,7 +48,7 @@ func RegisterAdmin(api huma.API, deps Deps) {
 	huma.Register(api, huma.Operation{
 		OperationID: "admin-approve-waitlist",
 		Method:      http.MethodPost,
-		Path:        "/admin/waitlist/{id}/approve",
+		Path:        "/api/admin/waitlist/{id}/approve",
 		Summary:     "Approve a waitlist row and email the API key",
 		Tags:        []string{"admin"},
 	}, func(ctx context.Context, in *struct {
@@ -92,7 +92,7 @@ func RegisterAdmin(api huma.API, deps Deps) {
 	huma.Register(api, huma.Operation{
 		OperationID: "admin-reject-waitlist",
 		Method:      http.MethodPost,
-		Path:        "/admin/waitlist/{id}/reject",
+		Path:        "/api/admin/waitlist/{id}/reject",
 		Summary:     "Reject a waitlist row",
 		Tags:        []string{"admin"},
 	}, func(ctx context.Context, in *struct {
@@ -109,7 +109,7 @@ func RegisterAdmin(api huma.API, deps Deps) {
 	huma.Register(api, huma.Operation{
 		OperationID: "admin-resend-verification",
 		Method:      http.MethodPost,
-		Path:        "/admin/waitlist/{id}/resend-verification",
+		Path:        "/api/admin/waitlist/{id}/resend-verification",
 		Summary:     "Re-mint and re-send the verification token",
 		Tags:        []string{"admin"},
 	}, func(ctx context.Context, in *struct {
@@ -136,7 +136,7 @@ func RegisterAdmin(api huma.API, deps Deps) {
 	huma.Register(api, huma.Operation{
 		OperationID: "admin-capabilities",
 		Method:      http.MethodGet,
-		Path:        "/admin/capabilities",
+		Path:        "/api/admin/capabilities",
 		Summary:     "Debug view of the cached capability catalog",
 		Tags:        []string{"admin"},
 	}, func(ctx context.Context, _ *struct{}) (*AdminCapabilitiesOut, error) {
@@ -186,7 +186,7 @@ func registerAdminUsers(api huma.API, deps Deps) {
 	huma.Register(api, huma.Operation{
 		OperationID: "admin-list-users",
 		Method:      http.MethodGet,
-		Path:        "/admin/users",
+		Path:        "/api/admin/users",
 		Summary:     "List approved users",
 		Tags:        []string{"admin"},
 	}, func(ctx context.Context, in *struct {
@@ -212,7 +212,7 @@ func registerAdminUsers(api huma.API, deps Deps) {
 	huma.Register(api, huma.Operation{
 		OperationID: "admin-get-user",
 		Method:      http.MethodGet,
-		Path:        "/admin/users/{id}",
+		Path:        "/api/admin/users/{id}",
 		Summary:     "User detail with API keys + usage summary",
 		Tags:        []string{"admin"},
 	}, func(ctx context.Context, in *struct {
@@ -263,7 +263,7 @@ func registerAdminUsage(api huma.API, deps Deps) {
 	huma.Register(api, huma.Operation{
 		OperationID: "admin-usage",
 		Method:      http.MethodGet,
-		Path:        "/admin/usage",
+		Path:        "/api/admin/usage",
 		Summary:     "Aggregate usage by API key (joined to owning user email)",
 		Tags:        []string{"admin"},
 	}, func(ctx context.Context, in *struct {
@@ -293,7 +293,7 @@ func registerAdminUsage(api huma.API, deps Deps) {
 	huma.Register(api, huma.Operation{
 		OperationID: "admin-usage-by-capability",
 		Method:      http.MethodGet,
-		Path:        "/admin/usage-by-capability",
+		Path:        "/api/admin/usage-by-capability",
 		Summary:     "Per-capability rollup separating gateway commit vs runner outcome",
 		Tags:        []string{"admin"},
 	}, func(ctx context.Context, in *struct {
@@ -328,7 +328,7 @@ func registerAdminLiveStreams(api huma.API, deps Deps) {
 	huma.Register(api, huma.Operation{
 		OperationID: "admin-live-streams",
 		Method:      http.MethodGet,
-		Path:        "/admin/live-streams",
+		Path:        "/api/admin/live-streams",
 		Summary:     "RTMP→HLS sessions across all users",
 		Tags:        []string{"admin"},
 	}, func(ctx context.Context, in *struct {
@@ -378,7 +378,7 @@ func registerAdminABRJobs(api huma.API, deps Deps) {
 	huma.Register(api, huma.Operation{
 		OperationID: "admin-abr-jobs",
 		Method:      http.MethodGet,
-		Path:        "/admin/abr-jobs",
+		Path:        "/api/admin/abr-jobs",
 		Summary:     "Recent ABR ladder transcode jobs across all users",
 		Tags:        []string{"admin"},
 	}, func(ctx context.Context, in *struct {
@@ -415,7 +415,7 @@ func registerAdminRegistry(api huma.API, deps Deps) {
 	huma.Register(api, huma.Operation{
 		OperationID: "admin-registry-summary",
 		Method:      http.MethodGet,
-		Path:        "/admin/registry/summary",
+		Path:        "/api/admin/registry/summary",
 		Summary:     "High-level numbers: cached rows + filter + last refresh",
 		Tags:        []string{"admin"},
 	}, func(ctx context.Context, _ *struct{}) (*AdminRegistrySummaryOut, error) {
@@ -448,7 +448,7 @@ func registerAdminRegistry(api huma.API, deps Deps) {
 	huma.Register(api, huma.Operation{
 		OperationID: "admin-registry-candidates",
 		Method:      http.MethodGet,
-		Path:        "/admin/registry/candidates",
+		Path:        "/api/admin/registry/candidates",
 		Summary:     "Live SelectMany candidates straight from the resolver (uncached)",
 		Tags:        []string{"admin"},
 	}, func(ctx context.Context, in *struct {
@@ -491,7 +491,7 @@ func registerAdminRegistry(api huma.API, deps Deps) {
 	huma.Register(api, huma.Operation{
 		OperationID: "admin-registry-health",
 		Method:      http.MethodGet,
-		Path:        "/admin/registry/health",
+		Path:        "/api/admin/registry/health",
 		Summary:     "In-memory route health (cooldowns + failure counters)",
 		Tags:        []string{"admin"},
 	}, func(ctx context.Context, _ *struct{}) (*AdminRouteHealthOut, error) {

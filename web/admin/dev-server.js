@@ -9,7 +9,9 @@ import { request as httpRequest } from 'node:http';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT ?? 3002);
 const GATEWAY = process.env.GATEWAY_URL ?? 'http://localhost:4000';
-const PROXY_PREFIXES = ['/api/', '/admin/', '/health', '/openapi.json', '/docs'];
+// All gateway API routes are now under /api/*. /health + /openapi.json
+// + /docs stay at the root for LB / ops convenience.
+const PROXY_PREFIXES = ['/api/', '/health', '/openapi.json', '/docs'];
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -77,5 +79,5 @@ createServer((req, res) => {
   return serveStatic(req, res);
 }).listen(PORT, () => {
   // eslint-disable-next-line no-console
-  console.log(`admin: http://localhost:${PORT} (proxying /api/* /admin/* → ${GATEWAY})`);
+  console.log(`admin: http://localhost:${PORT} (proxying /api/* → ${GATEWAY})`);
 });

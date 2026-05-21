@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # End-to-end smoke test for `make smoke`.
 #
-# Assumes `make dev` (or `make dev-livepeer`) is up: db + rustfs + bootstrap
-# + gateway. Daemons-up state lets the /v1/* path actually dispatch; without
-# them, /v1/abr and /v1/live return 503 (expected).
+# Assumes `make dev` (or `make dev-livepeer`) is up: db + minio + bootstrap
+# + gateway. All API routes live under /api/* (since the route rename in
+# May 2026); daemons-up state lets /api/v1/* actually dispatch.
 
 set -euo pipefail
 
@@ -32,20 +32,20 @@ case "$status" in
   *) fail "GET /health unexpected $status" ;;
 esac
 
-# ── 1. /v1/capabilities — registry-backed catalog (may be empty) ──
+# ── 1. /api/v1/capabilities — registry-backed catalog (may be empty) ──
 section "catalog"
-status=$(curl -s -o /tmp/smoke-caps.json -w "%{http_code}" "$GATEWAY/v1/capabilities" -H "Authorization: Bearer smoke-no-auth-yet")
+status=$(curl -s -o /tmp/smoke-caps.json -w "%{http_code}" "$GATEWAY/api/v1/capabilities" -H "Authorization: Bearer smoke-no-auth-yet")
 case "$status" in
-  401|200|503) pass "GET /v1/capabilities responds ($status)" ;;
+  401|200|503) pass "GET /api/v1/capabilities responds ($status)" ;;
   *) fail "unexpected status $status" ;;
 esac
 
 # ── 2. signup ─────────────────────────────────────────────────────
 section "signup → verify → approve"
-status=$(curl -s -o /tmp/smoke-signup.json -w "%{http_code}" -X POST "$GATEWAY/api/waitlist" \
+status=$(curl -s -o /tmp/smoke-signup.json -w "%{http_code}" -X POST "$GATEWAY/api/public/waitlist" \
   -H "Content-Type: application/json" \
   -d "{\"name\":\"$NAME\",\"email\":\"$EMAIL\"}")
-require_status 200 "$status" "POST /api/waitlist"
+require_status 200 "$status" "POST /api/public/waitlist"
 
 # Flip email_verified_at via DB (in real life: click the email link).
 docker compose exec -T db \
@@ -62,8 +62,8 @@ wid=$(docker compose exec -T db \
 pass "waitlist row id ($wid)"
 
 status=$(curl -s -o /tmp/smoke-approve.json -w "%{http_code}" \
-  -X POST -H "X-Admin-Token: $ADMIN_TOKEN" "$GATEWAY/admin/waitlist/$wid/approve")
-require_status 200 "$status" "POST /admin/waitlist/:id/approve"
+  -X POST -H "X-Admin-Token: $ADMIN_TOKEN" "$GATEWAY/api/admin/waitlist/$wid/approve")
+require_status 200 "$status" "POST /api/admin/waitlist/:id/approve"
 
 # Pull the plaintext key out of the gateway logs (email is disabled in
 # default compose; the key was logged with "would have sent").
@@ -76,38 +76,38 @@ section "portal cookie flow"
 jar=$(mktemp)
 trap 'rm -f $jar' EXIT
 status=$(curl -s -c "$jar" -o /dev/null -w "%{http_code}" \
-  -X POST "$GATEWAY/portal/login" \
+  -X POST "$GATEWAY/api/portal/login" \
   -H "Content-Type: application/json" \
   -d "{\"apiKey\":\"$key\"}")
-require_status 200 "$status" "POST /portal/login"
+require_status 200 "$status" "POST /api/portal/login"
 
-acc=$(curl -fsS -b "$jar" "$GATEWAY/portal/account")
-echo "$acc" | grep -q "$EMAIL" || fail "/portal/account email mismatch"
-pass "GET /portal/account returns session user"
+acc=$(curl -fsS -b "$jar" "$GATEWAY/api/portal/account")
+echo "$acc" | grep -q "$EMAIL" || fail "/api/portal/account email mismatch"
+pass "GET /api/portal/account returns session user"
 
-# ── 4. /v1/* bearer auth ─────────────────────────────────────────
-section "/v1/* bearer auth"
-status=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$GATEWAY/v1/abr" \
+# ── 4. /api/v1/* bearer auth ─────────────────────────────────────
+section "/api/v1/* bearer auth"
+status=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$GATEWAY/api/v1/abr" \
   -H "Content-Type: application/json" -d '{"input_url":"https://x"}')
-require_status 401 "$status" "POST /v1/abr without auth → 401"
+require_status 401 "$status" "POST /api/v1/abr without auth → 401"
 
 # With a valid key — accept 200 or 503 (daemons may be down in default dev)
-status=$(curl -s -o /tmp/smoke-abr.json -w "%{http_code}" -X POST "$GATEWAY/v1/abr" \
+status=$(curl -s -o /tmp/smoke-abr.json -w "%{http_code}" -X POST "$GATEWAY/api/v1/abr" \
   -H "Authorization: Bearer $key" \
   -H "Content-Type: application/json" -d '{"input_url":"https://example.com/sample.mp4"}')
 case "$status" in
-  200|502|503) pass "POST /v1/abr with valid key ($status)" ;;
+  200|502|503) pass "POST /api/v1/abr with valid key ($status)" ;;
   *) fail "unexpected status $status" ;;
 esac
 
-# ── 5. /v1/abr/upload-url ─────────────────────────────────────────
-section "/v1/abr/upload-url (RustFS)"
-status=$(curl -s -o /tmp/smoke-upload.json -w "%{http_code}" -X POST "$GATEWAY/v1/abr/upload-url" \
+# ── 5. /api/v1/abr/upload-url ────────────────────────────────────
+section "/api/v1/abr/upload-url (MinIO presign)"
+status=$(curl -s -o /tmp/smoke-upload.json -w "%{http_code}" -X POST "$GATEWAY/api/v1/abr/upload-url" \
   -H "Authorization: Bearer $key" \
   -H "Content-Type: application/json" -d '{"filename":"smoke.mp4","content_type":"video/mp4"}')
 case "$status" in
   200) pass "presigned upload URL minted" ;;
-  503) pass "RustFS unavailable (smoke OK in non-rustfs envs)" ;;
+  503) pass "S3 unavailable (smoke OK in non-S3 envs)" ;;
   *) fail "unexpected $status" ;;
 esac
 

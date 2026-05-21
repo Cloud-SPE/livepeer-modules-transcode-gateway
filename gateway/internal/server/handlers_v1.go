@@ -57,7 +57,7 @@ func registerV1Capabilities(api huma.API, deps Deps) {
 	huma.Register(api, huma.Operation{
 		OperationID: "v1-capabilities",
 		Method:      http.MethodGet,
-		Path:        "/v1/capabilities",
+		Path:        "/api/v1/capabilities",
 		Summary:     "List transcode capabilities advertised by the network",
 		Tags:        []string{"v1"},
 	}, func(ctx context.Context, _ *struct{}) (*CapabilitiesOut, error) {
@@ -107,7 +107,7 @@ func registerV1Upload(api huma.API, deps Deps) {
 	huma.Register(api, huma.Operation{
 		OperationID: "v1-abr-upload-url",
 		Method:      http.MethodPost,
-		Path:        "/v1/abr/upload-url",
+		Path:        "/api/v1/abr/upload-url",
 		Summary:     "Get a presigned S3 PUT URL for VOD ingest",
 		Tags:        []string{"v1"},
 	}, func(ctx context.Context, in *UploadURLIn) (*UploadURLOut, error) {
@@ -188,7 +188,7 @@ func registerV1ABR(api huma.API, deps Deps) {
 	huma.Register(api, huma.Operation{
 		OperationID: "v1-abr-submit",
 		Method:      http.MethodPost,
-		Path:        "/v1/abr",
+		Path:        "/api/v1/abr",
 		Summary:     "Submit an ABR ladder transcode job",
 		Tags:        []string{"v1"},
 	}, func(ctx context.Context, in *ABRIn) (*ABROut, error) {
@@ -320,7 +320,7 @@ func registerV1ABR(api huma.API, deps Deps) {
 					secret, _ := crypto.RandomToken(32)
 					if err := deps.Usage.SetWebhookSecret(ctx, workID, secret); err == nil {
 						body["webhook_url"] = strings.TrimRight(deps.Cfg.GatewayPublicURL, "/") +
-							"/api/abr/callback?work_id=" + workID.String()
+							"/api/webhooks/abr?work_id=" + workID.String()
 						body["webhook_secret"] = secret
 					}
 				}
@@ -379,7 +379,7 @@ func registerV1ABR(api huma.API, deps Deps) {
 	huma.Register(api, huma.Operation{
 		OperationID: "v1-abr-get",
 		Method:      http.MethodGet,
-		Path:        "/v1/abr/{id}",
+		Path:        "/api/v1/abr/{id}",
 		Summary:     "Get the status of an ABR job",
 		Tags:        []string{"v1"},
 	}, func(ctx context.Context, in *struct {
@@ -497,7 +497,7 @@ func registerV1ABR(api huma.API, deps Deps) {
 	huma.Register(api, huma.Operation{
 		OperationID: "v1-abr-delete-objects",
 		Method:      http.MethodDelete,
-		Path:        "/v1/abr/objects",
+		Path:        "/api/v1/abr/objects",
 		Summary:     "Delete a VOD upload and its transcode outputs from S3",
 		Tags:        []string{"v1"},
 	}, func(ctx context.Context, in *struct {
@@ -591,7 +591,7 @@ func registerV1Live(api huma.API, deps Deps) {
 	huma.Register(api, huma.Operation{
 		OperationID: "v1-live-create",
 		Method:      http.MethodPost,
-		Path:        "/v1/live",
+		Path:        "/api/v1/live",
 		Summary:     "Allocate an RTMP ingest + HLS egress session",
 		Tags:        []string{"v1"},
 	}, func(ctx context.Context, in *LiveIn) (*LiveCreateOut, error) {
@@ -611,7 +611,7 @@ func registerV1Live(api huma.API, deps Deps) {
 	huma.Register(api, huma.Operation{
 		OperationID: "v1-live-get",
 		Method:      http.MethodGet,
-		Path:        "/v1/live/{id}",
+		Path:        "/api/v1/live/{id}",
 		Summary:     "Get the current state of a live session",
 		Tags:        []string{"v1"},
 	}, func(ctx context.Context, in *struct {
@@ -652,7 +652,7 @@ func registerV1Live(api huma.API, deps Deps) {
 	huma.Register(api, huma.Operation{
 		OperationID: "v1-live-delete",
 		Method:      http.MethodDelete,
-		Path:        "/v1/live/{id}",
+		Path:        "/api/v1/live/{id}",
 		Summary:     "Close a live session",
 		Tags:        []string{"v1"},
 	}, func(ctx context.Context, in *struct {

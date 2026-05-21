@@ -52,9 +52,13 @@ func New(deps Deps) http.Handler {
 }
 
 // pathAwareAuth dispatches to the right auth handler based on URL prefix.
-// /portal/login + /portal/logout pass through; everything else under
-// /portal/* needs a cookie session. /admin/* needs X-Admin-Token. /v1/*
-// needs Bearer auth + rate limit.
+// All API routes now live under /api/*. Auth dispatch by prefix:
+//   /api/v1/*        Bearer API-key + rate-limit (customer-facing API)
+//   /api/admin/*     X-Admin-Token
+//   /api/portal/*    cookie session (login + logout pass through)
+//   /api/public/*    no auth (waitlist signup, email verification)
+//   /api/webhooks/*  no auth (HMAC verified in-handler)
+//   everything else  no auth (static SPA serving, /health, /metrics)
 func pathAwareAuth(deps Deps) func(http.Handler) http.Handler {
 	rl := NewRateLimit(deps.Cfg.V1RateLimitPerMinute, deps.Cfg.V1RateLimitBurst)
 	bearer := RequireAPIKey(deps)
@@ -69,18 +73,19 @@ func pathAwareAuth(deps Deps) func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			p := r.URL.Path
 			switch {
-			case strings.HasPrefix(p, "/v1/"):
+			case strings.HasPrefix(p, "/api/v1/"):
 				bearerThenRate.ServeHTTP(w, r)
-			case p == "/portal/login" || p == "/portal/logout":
+			case p == "/api/portal/login" || p == "/api/portal/logout":
 				next.ServeHTTP(w, r)
-			case strings.HasPrefix(p, "/api/"):
-				// /api/* (incl. /api/abr/callback) is public — auth is
-				// in-handler (HMAC for webhooks, none for waitlist).
-				next.ServeHTTP(w, r)
-			case strings.HasPrefix(p, "/portal/"):
+			case strings.HasPrefix(p, "/api/portal/"):
 				portalGated.ServeHTTP(w, r)
-			case strings.HasPrefix(p, "/admin/"):
+			case strings.HasPrefix(p, "/api/admin/"):
 				adminGated.ServeHTTP(w, r)
+			case strings.HasPrefix(p, "/api/public/"),
+				strings.HasPrefix(p, "/api/webhooks/"):
+				// public + webhook surfaces — in-handler auth (HMAC for
+				// webhooks, none for public signup/verify).
+				next.ServeHTTP(w, r)
 			default:
 				next.ServeHTTP(w, r)
 			}
