@@ -1,11 +1,11 @@
 # Capability catalog
 
-How the `capabilities` table stays fresh and what `/v1/capabilities`
+How the `capabilities` table stays fresh and what `/api/v1/capabilities`
 returns.
 
 ## Why a cache
 
-Querying the resolver on every `/v1/capabilities` request would
+Querying the resolver on every `/api/v1/capabilities` request would
 couple catalog reads to chain availability. The cache decouples them
 and keeps catalog reads ~10ms.
 
@@ -53,7 +53,7 @@ loop:
 A failed refresh logs + retries on the next tick. The request path
 never blocks on this; it reads `WHERE active=true` from the table.
 
-## `GET /v1/capabilities` response
+## `GET /api/v1/capabilities` response
 
 ```json
 {
@@ -71,10 +71,10 @@ never blocks on this; it reads `WHERE active=true` from the table.
       "constraints": { … }
     },
     {
-      "id": "video:transcode.live:default",
+      "id": "video:transcode.live:gateway-ingest",
       "capability": "video:transcode.live",
-      "offering": "default",
-      "interaction_mode": "live-session-remote-runner@v0",
+      "offering": "gateway-ingest",
+      "interaction_mode": "live-session-gateway-ingest@v0",
       "name": "Live RTMP→HLS ABR",
       "category": "live",
       "price_per_work_unit_wei": "2000000000",
@@ -87,7 +87,7 @@ never blocks on this; it reads `WHERE active=true` from the table.
 
 ## Failure modes
 
-| What | `/v1/capabilities` response |
+| What | `/api/v1/capabilities` response |
 |---|---|
 | First refresh hasn't landed | `503 capabilities_cache_unavailable` |
 | Last refresh older than `MAX_STALE` | `503 capabilities_cache_stale` |

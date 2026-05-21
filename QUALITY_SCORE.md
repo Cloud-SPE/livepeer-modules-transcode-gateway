@@ -17,12 +17,12 @@ Grading scale: **A** (load-bearing, well-tested, well-documented) →
 | Gateway — schema | `gateway/internal/repo/`, `gateway/migrations/` | C | Phase 1. Initial migration ports openai schema + `live_streams` + renames `models` → `capabilities`. sqlc-generated accessors. |
 | Gateway — auth | `gateway/internal/proxy/auth.go`, `internal/handlers/portal/auth.go`, `handlers/admin/auth.go` | C | Phase 1. Bearer + cookie + admin token. |
 | Gateway — metrics | `gateway/internal/metrics/` | C | Phase 1. Prometheus exposition. |
-| Gateway — S3 / RustFS | `gateway/internal/s3/` | C | Phase 2. Presigned PUT for VOD ingest. |
+| Gateway — S3 / MinIO | `gateway/internal/s3/` | C | Phase 2. Presigned PUT for VOD ingest + STS AssumeRole for live-session scoped credentials. |
 | Web — site | `web/site/` | C | Phase 3. Zero-build Lit, rebranded to "Livepeer Video Gateway". |
 | Web — portal | `web/portal/` | C | Phase 3. Playground rewritten with Live + Transcode tabs, hls.js via esm.sh. |
 | Web — admin | `web/admin/` | C | Phase 3. Capability registry view + waitlist + users + usage. |
 | Protos | `proto/` | C | Phase 0. Payments + registry trees vendored. Codegen target: `gateway/gen/proto/`. |
-| Compose stack | `docker-compose.yml` | C | Phase 0 + 4. db + rustfs + bootstrap + gateway in default stack; daemons behind `livepeer` profile. |
+| Compose stack | `docker-compose.yml` | C | Phase 0 + 4. db + minio + bootstrap + gateway in default stack; daemons behind `livepeer` profile. |
 | CI | `.github/workflows/` | C | Phase 0 — Go + Web + docs link check. |
 | Tests | `gateway/**/*_test.go` | F | Phase 1 onwards. |
 | OpenAPI | `/openapi.json` + `/docs`, via huma struct tags | C | Phase 1. Auto-generated from request/response structs. |

@@ -1,17 +1,17 @@
 # ABR pipeline
 
-The `/v1/abr` flow end-to-end.
+The `/api/v1/abr` flow end-to-end.
 
 ## Surface
 
-- `POST /v1/abr/upload-url` — request a presigned RustFS PUT for VOD ingest
-- `POST /v1/abr` — submit a transcode job
-- `GET /v1/abr/:job_id` — poll job status + master playlist URL
+- `POST /api/v1/abr/upload-url` — request a presigned MinIO PUT for VOD ingest
+- `POST /api/v1/abr` — submit a transcode job
+- `GET /api/v1/abr/:job_id` — poll job status + master playlist URL
 
 ## Request shape
 
 ```json
-POST /v1/abr
+POST /api/v1/abr
 {
   "input_url": "https://.../source.mp4",
   "ladder": "default" | {
@@ -69,11 +69,11 @@ When the runner finishes:
 
 1. **Client requests upload URL.** Optional. The gateway presigns
    `PUT /lvp-video-ingest/abr/<api_key_id>/<uuid>/<filename>` against
-   RustFS for `S3_PRESIGN_TTL_SECONDS` (default 1h). Returns
+   MinIO for `S3_PRESIGN_TTL_SECONDS` (default 1h). Returns
    `{upload_url, object_url}`.
-2. **Client uploads bytes to RustFS.** Direct PUT, no gateway in path.
-3. **Client submits job.** `POST /v1/abr` with `input_url` (either
-   the RustFS object URL or any HTTPS URL the runner can fetch).
+2. **Client uploads bytes to MinIO.** Direct PUT, no gateway in path.
+3. **Client submits job.** `POST /api/v1/abr` with `input_url` (either
+   the MinIO object URL or any HTTPS URL the runner can fetch).
 4. **Gateway opens `usage_reservations`.** State=`open`,
    `capability='livepeer:transcode/abr-ladder'`,
    `offering='default'` (or the custom ladder id).
@@ -88,7 +88,7 @@ When the runner finishes:
    transcoding finishes).
 8. **Gateway commits `usage_reservations`.** State=`committed`,
    `committed_work_units` populated.
-9. **Client polls `GET /v1/abr/:id`** until `status='succeeded'`,
+9. **Client polls `GET /api/v1/abr/:id`** until `status='succeeded'`,
    then loads `master_playlist_url` in a player.
 
 ## Failure modes
@@ -98,7 +98,7 @@ When the runner finishes:
 | `input_url` unreachable from runner | Runner returns 4xx; gateway propagates 4xx; reservation refunded. |
 | Runner crashes mid-transcode | Broker returns 5xx after timeout; failover triggers; new envelope minted. |
 | All candidates exhaust | Gateway returns 502; last error_text recorded in reservation. |
-| Presigned URL expired | Client receives S3 error on PUT; gets a fresh URL via `/v1/abr/upload-url`. |
+| Presigned URL expired | Client receives S3 error on PUT; gets a fresh URL via `/api/v1/abr/upload-url`. |
 
 ## What this doc does not cover
 

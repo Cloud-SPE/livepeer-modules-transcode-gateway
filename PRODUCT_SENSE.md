@@ -7,23 +7,23 @@ or scope decisions are ambiguous, fall back to these.
 
 A **transcode-focused entry point to the Livepeer network**. Developers
 who want VOD ABR ladder transcoding or RTMP→HLS live streaming get a
-small HTTP API + an S3-compatible ingest store, and the work runs on
-Livepeer orchestrators.
+small HTTP API + an S3-compatible ingest store (MinIO) + a public RTMP
+endpoint, and the work runs on Livepeer orchestrators.
 
 ## What we are not
 
 - A general video platform. We expose ABR ladder transcoding + live
   RTMP→HLS only in v1. No clipping, no thumbnails-as-product, no
   catch-up VOD recording (yet).
-- A media CDN. We don't host playback — we hand back broker-issued
-  HLS URLs.
+- A media CDN. We don't host playback at the HTTP layer — we hand back
+  HLS URLs that point at our object store (MinIO today, CDN later).
 - A billing product. Beta is free; pricing is a separate concern.
-- A Livepeer Studio clone. Distinct API surface (`/v1/abr`, `/v1/live`)
-  by design.
+- A Livepeer Studio clone. Distinct API surface (`/api/v1/abr`,
+  `/api/v1/live`) by design.
 
 ## Principles
 
-1. **Boring API shapes.** `POST /v1/abr`, `POST /v1/live`. Predictable
+1. **Boring API shapes.** `POST /api/v1/abr`, `POST /api/v1/live`. Predictable
    bodies, predictable responses. If a Livepeer-savvy developer can't
    read the OpenAPI spec and guess how to use it, that's a bug.
 2. **No surprise behavior.** A request that succeeds should commit a
@@ -34,12 +34,14 @@ Livepeer orchestrators.
    approval), not at request time.
 4. **Free during beta means truly free.** No "free tier with limits."
    Limits are a billing concern; billing isn't here yet.
-5. **Capabilities reflect reality.** `/v1/capabilities` shows what the
-   on-chain registry advertises right now. If a capability disappears,
-   the API reflects that within one refresh cycle.
-6. **Media bytes don't traverse Go.** VOD ingest goes client → RustFS;
-   live ingest goes client → broker. The gateway signs URLs and
-   tracks reservations — it never proxies bytes.
+5. **Capabilities reflect reality.** `/api/v1/capabilities` shows what
+   the on-chain registry advertises right now. If a capability
+   disappears, the API reflects that within one refresh cycle.
+6. **Media bytes don't traverse Go beyond raw RTMP relay.** VOD ingest
+   goes client → MinIO; live ingest goes client → gateway RTMP listener
+   → orchestrator's private RTMP endpoint → runner → MinIO (HLS). The
+   gateway signs URLs, mints scoped STS creds, tracks reservations, and
+   shuttles TCP frames — it never decodes / encodes / muxes.
 7. **The portal is a courtesy, not a product.** It exists so users can
    manage API keys, see usage, and exercise the API via the playground.
    Anything beyond that belongs out of the portal.
@@ -55,4 +57,4 @@ Livepeer orchestrators.
 - **Choose deletion over feature flags.** If something doesn't fit v1,
   remove it cleanly. Add it back when we get to v2.
 - **Choose live-poll over push.** No SSE, no webhooks in v1 — clients
-  poll `GET /v1/live/:id`. Push channels are a v2 concern.
+  poll `GET /api/v1/live/:id`. Push channels are a v2 concern.

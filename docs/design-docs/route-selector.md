@@ -74,7 +74,7 @@ single-digit-percent error rates on top of supply that fluctuates.
 
 ## Open questions
 
-- **Live route selection on re-allocation.** `/v1/live` does not
+- **Live route selection on re-allocation.** `/api/v1/live` does not
   failover within a session; a future plan should explore whether
   a "preferred broker" hint can let clients re-allocate against the
   same orchestrator when ingest drops.

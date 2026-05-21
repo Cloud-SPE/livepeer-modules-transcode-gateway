@@ -60,7 +60,7 @@ type Config struct {
 	// a different label.
 	LiveGatewayIngestOffering string `env:"LIVE_GATEWAY_INGEST_OFFERING" envDefault:"gateway-ingest"`
 
-	// Live (live-session-remote-runner@v0) tuning. All four are
+	// Live (live-session-gateway-ingest@v0) tuning. All four are
 	// configurable per the runner team's plan; defaults match the spec.
 	LiveIdleTimeoutSecs        int `env:"LIVE_IDLE_TIMEOUT_SECS" envDefault:"120"`
 	LiveReconcileIntervalSecs  int `env:"LIVE_RECONCILE_INTERVAL_SECS" envDefault:"30"`
@@ -94,7 +94,7 @@ func Load() (Config, error) {
 func (c Config) Warnings() []string {
 	var w []string
 	if c.AdminToken == "" {
-		w = append(w, "ADMIN_TOKEN unset — /admin/* will return 503 admin_disabled")
+		w = append(w, "ADMIN_TOKEN unset — /api/admin/* will return 503 admin_disabled")
 	}
 	if c.APIKeyHashPepper == "" {
 		w = append(w, "API_KEY_HASH_PEPPER unset — API keys hash without pepper (dev only)")
@@ -106,7 +106,7 @@ func (c Config) Warnings() []string {
 		w = append(w, "RESEND_API_KEY unset — verification + key delivery emails will log to stdout instead of send")
 	}
 	if c.S3AccessKeyID == "" || c.S3SecretAccessKey == "" {
-		w = append(w, "S3 credentials unset — /v1/abr/upload-url will return 503")
+		w = append(w, "S3 credentials unset — /api/v1/abr/upload-url will return 503")
 	}
 	return w
 }

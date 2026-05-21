@@ -29,13 +29,13 @@
       <h2>Transcode video on the Livepeer network.</h2>
       <p class="lead">VOD ABR ladder transcoding and live RTMP→HLS streaming. Free during beta.</p>
       <pre class="code"><code># VOD ABR ladder
-curl https://api.example.com/v1/abr \
+curl https://api.example.com/api/v1/abr \
   -H "Authorization: Bearer sk-..." \
   -H "Content-Type: application/json" \
   -d '{"input_url":"https://example.com/source.mp4"}'
 
 # Live RTMP→HLS
-curl https://api.example.com/v1/live \
+curl https://api.example.com/api/v1/live \
   -H "Authorization: Bearer sk-..." \
   -X POST</code></pre>
     </section>
@@ -49,12 +49,12 @@ curl https://api.example.com/v1/live \
     <section class="endpoints">
       <h3>API surface</h3>
       <ul>
-        <li><code>POST /v1/abr</code> — VOD ABR ladder transcode</li>
-        <li><code>POST /v1/abr/upload-url</code> — presigned RustFS PUT for VOD ingest</li>
-        <li><code>POST /v1/live</code> — allocate an RTMP ingest + HLS egress session</li>
-        <li><code>GET /v1/live/:id</code> — live session status</li>
-        <li><code>DELETE /v1/live/:id</code> — close a live session</li>
-        <li><code>GET /v1/capabilities</code> — registry-backed transcode catalog</li>
+        <li><code>POST /api/v1/abr</code> — VOD ABR ladder transcode</li>
+        <li><code>POST /api/v1/abr/upload-url</code> — presigned MinIO PUT for VOD ingest</li>
+        <li><code>POST /api/v1/live</code> — allocate an RTMP ingest + HLS egress session</li>
+        <li><code>GET /api/v1/live/:id</code> — live session status</li>
+        <li><code>DELETE /api/v1/live/:id</code> — close a live session</li>
+        <li><code>GET /api/v1/capabilities</code> — registry-backed transcode catalog</li>
       </ul>
     </section>
   </main>

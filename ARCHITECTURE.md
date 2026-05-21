@@ -15,22 +15,21 @@ For invariants, see
 
 ```mermaid
 flowchart LR
-  user[Developer<br/>HTTP client] -->|/v1/*<br/>Bearer sk-…| GW
-  visitor[Web visitor] -->|HTTP| SITE
-  portalUser[Approved user] -->|HTTP + cookie| PORTAL
-  admin[Operator] -->|HTTP + X-Admin-Token| ADMIN
+  user[Developer<br/>HTTP client] -->|/api/v1/*<br/>Bearer sk-…| GW
+  visitor[Web visitor] -->|HTTP| GW
+  portalUser[Approved user] -->|HTTP + cookie| GW
+  admin[Operator] -->|HTTP + X-Admin-Token| GW
+  obs[OBS / ffmpeg] -->|RTMP :1935| GW
 
-  SITE[web/site<br/>Lit zero-build] -->|/api/*| GW
-  PORTAL[web/portal<br/>Lit zero-build] -->|/api/*, /portal/*, /v1/*| GW
-  ADMIN[web/admin<br/>Lit zero-build] -->|/api/*, /admin/*| GW
-
-  GW[gateway<br/>Go / huma + chi] -->|SQL| DB[(Postgres)]
-  GW -->|S3| RFS[RustFS<br/>S3-compatible]
+  GW[gateway<br/>Go / huma + chi<br/>+ embedded SPAs<br/>+ RTMP listener] -->|SQL| DB[(Postgres)]
+  GW -->|S3 + STS| MINIO[MinIO<br/>S3-compatible]
   GW -->|gRPC UDS| REG[service-registry-daemon]
   GW -->|gRPC UDS| PAYER[payment-daemon]
   GW -->|Livepeer-* headers<br/>+ Livepeer-Payment| BROKER[capability-broker<br/>on orchestrator host]
+  GW -->|RTMP relay| BROKER
   BROKER --> RUN_ABR[abr-runner<br/>VOD ladder]
-  BROKER --> RUN_LIVE[rtmp-ingress-hls-egress<br/>live mode]
+  BROKER --> RUN_LIVE[live-runner<br/>gateway-ingest mode]
+  RUN_LIVE -->|HLS PUT<br/>scoped STS creds| MINIO
   GW -->|optional| RESEND[Resend<br/>email]
 
   REG -.->|reads| CHAIN[(EVM chain<br/>AI service registry)]
@@ -38,9 +37,14 @@ flowchart LR
 
   classDef ours fill:#1f3a2a,stroke:#4cd97b,color:#e8eaed;
   classDef ext fill:#1a1c20,stroke:#9aa0a6,color:#9aa0a6,stroke-dasharray: 4 2;
-  class GW,SITE,PORTAL,ADMIN,DB,RFS ours;
+  class GW,DB,MINIO ours;
   class REG,PAYER,BROKER,RUN_ABR,RUN_LIVE,RESEND,CHAIN ours;
 ```
+
+Production serves the three SPAs (`/`, `/portal/`, `/admin/`) from the
+same Go binary that hosts the API — they're embedded via `//go:embed`
+under `gateway/internal/server/webroot/`. Dev can still split them onto
+their own ports via `make web`.
 
 Green = in this repo or a local compose service. Dashed gray = external
 runtime peers (run as their own containers / on other hosts).
@@ -51,7 +55,7 @@ runtime peers (run as their own containers / on other hosts).
 
 | Component | Path | Purpose | Owns |
 |---|---|---|---|
-| **Gateway** | `gateway/` | Translates transcode requests → Livepeer wire. Hosts the SaaS shell (waitlist, sessions, API keys, admin). Presigns RustFS PUTs for VOD ingest. | The only stateful Go service in this repo. |
+| **Gateway** | `gateway/` | Translates transcode requests → Livepeer wire. Hosts the SaaS shell (waitlist, sessions, API keys, admin). Presigns MinIO PUTs for VOD ingest; mints scoped STS creds for live runners. Owns the public RTMP listener on `:1935`. Embeds and serves the three SPAs. | The only stateful Go service in this repo. |
 | **Marketing site** | `web/site/` | Public landing + waitlist signup + email-verification page. | Generic copy; rebrand at deploy time. |
 | **Portal** | `web/portal/` | Authenticated user dashboard: account, API keys, usage, playground (Live + Transcode tabs). | Cookie-session UX. |
 | **Admin** | `web/admin/` | Operator console: waitlist queue, users, usage, capability registry debug. | `X-Admin-Token` UX (stored in localStorage). |
@@ -63,8 +67,8 @@ External services pulled at runtime:
 |---|---|---|
 | `service-registry-daemon` | `tztcloud/livepeer-service-registry-daemon:v1.3.0` | `livepeer` |
 | `payment-daemon` | `tztcloud/livepeer-payment-daemon:v1.3.0` | `livepeer` |
-| `rustfs` | `rustfs/rustfs:latest` | default |
-| `rustfs-bootstrap` (one-shot) | `minio/mc:latest` | default |
+| `minio` | `minio/minio:latest` | default |
+| `minio-bootstrap` (one-shot) | `minio/mc:latest` | default |
 | `capability-broker` + runners | (operator side) | not in compose |
 
 ---
@@ -232,30 +236,30 @@ Identical to `livepeer-modules-openai`. See its
 [ARCHITECTURE.md §5.1](../livepeer-modules-openai/ARCHITECTURE.md#51-signup--verify--approve--key)
 for the sequence diagram — this repo's flow is byte-for-byte the same.
 
-### 5.2 `/v1/abr` request lifecycle
+### 5.2 `/api/v1/abr` request lifecycle
 
 ```mermaid
 sequenceDiagram
   participant C as Client
   participant GW as gateway
   participant DB as postgres
-  participant RFS as rustfs
+  participant MIN as minio
   participant PAY as payment-daemon
   participant REG as service-registry-daemon
   participant BRK as capability-broker
   participant RUN as abr-runner
 
   opt VOD upload first
-    C->>GW: POST /v1/abr/upload-url
-    GW->>RFS: PresignPut(key)
+    C->>GW: POST /api/v1/abr/upload-url
+    GW->>MIN: PresignPut(key)
     GW-->>C: {upload_url, object_url}
-    C->>RFS: PUT bytes
+    C->>MIN: PUT bytes
   end
 
-  C->>GW: POST /v1/abr {input_url}<br/>Authorization: Bearer sk-…
+  C->>GW: POST /api/v1/abr {input_url}<br/>Authorization: Bearer sk-…
   GW->>DB: SELECT api_keys WHERE key_hash=…
   GW->>DB: INSERT usage_reservations (state='open', work_id)
-  GW->>REG: gRPC: select candidates (livepeer:transcode/abr-ladder)
+  GW->>REG: gRPC: select candidates (video:transcode.abr)
   REG-->>GW: ranked candidates
   GW->>PAY: gRPC: CreatePayment(face_value, recipient, capability, offering)
   PAY-->>GW: payment_bytes
@@ -274,39 +278,50 @@ sequenceDiagram
   end
 ```
 
-### 5.3 `/v1/live` session lifecycle
+### 5.3 `/api/v1/live` session lifecycle
+
+The live mode is `live-session-gateway-ingest@v0`: the gateway owns the
+public RTMP endpoint and relays customer RTMP to the orchestrator's
+private ingest URL. The runner writes HLS directly to gateway-owned
+MinIO using short-lived STS credentials scoped to the session's prefix.
 
 ```mermaid
 sequenceDiagram
   participant C as Client
+  participant OBS as OBS/ffmpeg
   participant GW as gateway
   participant DB as postgres
+  participant MIN as minio
   participant PAY as payment-daemon
   participant REG as service-registry-daemon
   participant BRK as capability-broker
-  participant RUN as rtmp-runner
+  participant RUN as live-runner
 
-  C->>GW: POST /v1/live
+  C->>GW: POST /api/v1/live
   GW->>DB: INSERT usage_reservations (state='open', long-lived)
   GW->>DB: INSERT live_streams (status='provisioning')
-  GW->>REG: gRPC: select (livepeer:transcode/live-rtmp-hls-abr)
+  GW->>REG: gRPC: select (video:transcode.live, offering=gateway-ingest)
+  GW->>MIN: STS AssumeRole<br/>(inline policy: live-out/<api>/<sess>/*)
+  MIN-->>GW: scoped temp creds
   GW->>PAY: gRPC: CreatePayment (session-open face value)
-  GW->>BRK: OpenSession (rtmp-ingress-hls-egress mode)
-  BRK-->>GW: {rtmp_url, stream_key, hls_url}
-  GW->>DB: UPDATE live_streams status='live', urls
-  GW-->>C: {id, ingest, playback}
+  GW->>BRK: POST /v1/cap (live-session-gateway-ingest@v0)<br/>{output_credential, ingest_accept.stream_key}
+  BRK-->>GW: {private_ingest_url}
+  GW->>DB: UPDATE live_streams status='live', urls + private_ingest_url
+  GW-->>C: {id, ingest=rtmp://gateway:1935, playback}
 
-  C->>BRK: RTMP push
-  BRK->>RUN: ingest + transcode ladder
-  RUN-->>BRK: LL-HLS segments
+  OBS->>GW: RTMP push to :1935 (authenticated via stream key)
+  GW->>BRK: relay FLV tags to private_ingest_url
+  BRK->>RUN: transcode ladder
+  RUN-->>MIN: HLS PUTs (scoped STS creds)
   loop interim debit
     BRK->>PAY: Debit(session_id, units)
   end
 
-  C->>GW: GET /v1/live/:id
-  GW-->>C: {status, playback_url, started_at}
+  C->>GW: GET /api/v1/live/:id
+  GW-->>C: {status, playback, started_at, runner_status}
 
-  C->>GW: DELETE /v1/live/:id
+  C->>GW: DELETE /api/v1/live/:id
+  GW->>GW: RTMPProbe.CloseSession (close customer TCP + upstream push, ~2s)
   GW->>BRK: CloseSession
   GW->>PAY: settle session
   GW->>DB: UPDATE live_streams status='ended'
@@ -329,12 +344,13 @@ Identical to openai gateway.
 
 | What | How it talks to us |
 |---|---|
-| HTTP clients | HTTPS → `/v1/*` (Bearer auth) |
-| Portal / admin / site users | HTTPS → static SPAs + JSON APIs |
+| HTTP clients | HTTPS → `/api/v1/*` (Bearer auth) |
+| Portal / admin / site users | HTTPS → embedded SPAs + JSON APIs under `/api/*` |
+| OBS / ffmpeg | RTMP → `:1935` (live ingest, authenticated by stream key) |
 | `service-registry-daemon` | gRPC over UDS (`/var/run/livepeer/service-registry.sock`) |
 | `payment-daemon` | gRPC over UDS (`/var/run/livepeer/payer-daemon.sock`) |
-| `capability-broker` (on orch host) | HTTPS, per Livepeer wire spec |
-| RustFS | S3 API over HTTP (compose network) |
+| `capability-broker` (on orch host) | HTTPS, per Livepeer wire spec; RTMP relay over a private orch endpoint |
+| MinIO | S3 API over HTTP (compose network) + STS `AssumeRole` for per-session live creds |
 | Postgres | TCP, single DB for all SaaS + live-stream data |
 | Resend | HTTPS, email delivery (optional in dev) |
 | EVM chain (Arbitrum One by default) | Indirectly — only via the two daemons |
@@ -343,7 +359,7 @@ Identical to openai gateway.
 
 ## 7. Boundaries that matter
 
-- **The proxy doesn't know about humans.** `/v1/*` authenticates via
+- **The proxy doesn't know about humans.** `/api/v1/*` authenticates via
   API key and joins to `usage_reservations.api_key_id`. Names + emails
   live in `waitlist`. The only join between the two namespaces is
   `api_keys.waitlist_id`.
@@ -355,9 +371,11 @@ Identical to openai gateway.
   `livepeer-modules-openai`. Transcode specifics live in
   `internal/proxy/{abr,live,capabilities}.go` and the `live_streams`
   table.
-- **Media bytes never traverse Go.** VOD bytes go client → RustFS →
-  runner. Live bytes go client → broker → runner. The gateway only
-  signs URLs and reads catalog state.
+- **Media bytes never traverse Go beyond the RTMP relay.** VOD bytes go
+  client → MinIO → runner. Live bytes go client → gateway RTMP listener
+  → orchestrator's private RTMP endpoint → runner → MinIO (HLS). The
+  gateway only signs URLs, mints scoped STS creds, reads catalog state,
+  and shuttles RTMP TCP frames — it never demuxes / decodes / encodes.
 - **Runners don't import from the gateway and vice versa.** The only
   contract is the Livepeer wire spec, mediated by the broker.
 
@@ -365,8 +383,8 @@ Identical to openai gateway.
 
 ## 8. Observability
 
-- **Prometheus** `/metrics` on the gateway, optionally Bearer-gated
-  via `METRICS_TOKEN`. Surfaces:
+- **Prometheus** `/metrics` on the gateway (unprefixed, at root),
+  optionally Bearer-gated via `METRICS_TOKEN`. Surfaces:
   - Default Go runtime metrics under prefix `video_gateway_*`
   - HTTP: `video_gateway_http_requests_total{method,route,status}`,
     `video_gateway_http_request_duration_seconds`
@@ -374,11 +392,14 @@ Identical to openai gateway.
     `video_gateway_live_streams_active`
   - Waitlist: `video_gateway_waitlist_signups_total`
   - Route health: `livepeer_gateway_route_health_*`
+  - RTMP ingest: `livepeer_gateway_rtmp_active_publishes`,
+    `livepeer_gateway_rtmp_publishes_total{outcome}`
 - **Structured JSON logs** to stdout via `log/slog`. Request IDs
-  propagated as `Livepeer-Request-Id` on `/v1/*`.
+  propagated as `Livepeer-Request-Id` on `/api/v1/*`.
 - **`usage_reservations`** + **`live_streams`** are the durable
-  per-request and per-session logs (queryable via `/admin/usage` and
-  `/portal/usage`).
+  per-request and per-session logs (queryable via `/api/admin/usage` and
+  `/api/portal/usage`). `live_streams.runner_status_json` holds the
+  reconciler's most recent runner-status snapshot for the admin UI.
 
 ---
 
@@ -387,35 +408,33 @@ Identical to openai gateway.
 ```mermaid
 flowchart TB
   subgraph host[Single host or k8s pod]
-    GW[gateway]
+    GW[gateway<br/>:4000 HTTP<br/>:1935 RTMP<br/>+ embedded SPAs]
     DB[(postgres)]
-    RFS[(rustfs)]
+    MIN[(minio<br/>:9000 S3<br/>+ STS)]
     REG[service-registry-daemon]
     PAYER[payment-daemon]
     UDS[(livepeer-run<br/>volume<br/>UDS sockets)]
   end
 
   GW <-->|TCP| DB
-  GW <-->|S3| RFS
+  GW <-->|S3 + STS| MIN
   GW <-->|UDS| UDS
   REG <-->|UDS| UDS
   PAYER <-->|UDS| UDS
 
-  CDN[CDN / static host]
-  cdn_site[web/site] --> CDN
-  cdn_portal[web/portal] --> CDN
-  cdn_admin[web/admin] --> CDN
-
-  proxy[Reverse proxy<br/>Traefik / nginx / Cloud LB] -->|host: api.*| GW
-  proxy -->|host: example.com| CDN
-  proxy -->|host: portal.*| CDN
-  proxy -->|host: admin.*| CDN
-  proxy -->|host: ingest.*| RFS
+  proxy[Reverse proxy<br/>Traefik / nginx / Cloud LB] -->|all HTTP| GW
+  proxy -->|host: ingest.*<br/>HLS public read| MIN
+  rtmp[OBS / ffmpeg] -->|RTMP :1935| GW
   proxy -->|host: metrics.*<br/>+ basic auth| GW
 ```
 
-In dev, the same shape collapses: `make dev` runs gateway + db + rustfs
-+ bootstrap; each SPA runs via its own `dev-server.js`.
+The reverse proxy can put a single domain in front of the gateway — the
+SPAs, the API, `/health`, and `/metrics` all live on the same port.
+Optionally split metrics behind basic auth on a separate hostname.
+
+In dev, `make dev` runs gateway + db + minio + bootstrap; the embedded
+SPAs are served from `:4000`. Devs who want hot-reload run `make web`
+which starts each SPA on its own port and proxies `/api/*` to `:4000`.
 
 ---
 

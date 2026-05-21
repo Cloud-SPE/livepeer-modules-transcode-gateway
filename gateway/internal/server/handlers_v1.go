@@ -788,9 +788,11 @@ func mapBrokerState(brokerState string) (repo.LiveStreamStatus, bool) {
 }
 
 // ladderFromInput converts the customer-facing ABRLadder (used for both
-// ABR and live by historical reuse) into the live-session-remote-runner
-// wire shape. Returns nil for empty / unspecified ladders so the broker
-// falls back to the capability default.
+// ABR and live by historical reuse) into the live broker wire shape
+// (the LiveLadder / LiveLadderRung types in proxy/livepeer/live_session.go,
+// which both legacy live-session-remote-runner@v0 and current
+// live-session-gateway-ingest@v0 share). Returns nil for empty /
+// unspecified ladders so the broker falls back to the capability default.
 func ladderFromInput(in *ABRLadder) *livepeer.LiveLadder {
 	if in == nil || len(in.Rungs) == 0 {
 		return nil

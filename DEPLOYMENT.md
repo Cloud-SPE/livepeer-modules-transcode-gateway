@@ -13,22 +13,25 @@ This doc is for production.
 
 ## Topology
 
-A single-host or single-pod deployment of the load-bearing services,
-with the three SPAs deployed independently:
+A single-host or single-pod deployment. The gateway binary serves the
+API, the three SPAs (embedded), `/health`, and `/metrics` from one port
+(default `4000`), and the public RTMP listener on `:1935`:
 
 ```
                 ┌────────────────────────────────────────┐
   internet ──►  │  reverse proxy (Traefik / nginx / LB)  │
-                └────┬───────────┬───────────┬───────────┘
-                     │ api.*     │ site.*    │ ingest.*
-                     │           │ portal.*  │ metrics.*
-                     │           │ admin.*   │ (basic auth)
-                     ▼           ▼           ▼
-                ┌────────┐   ┌────────┐   ┌────────┐
-                │gateway │   │ CDN /  │   │rustfs  │
-                │  :4000 │   │ static │   │ :9000  │
-                └───┬────┘   └────────┘   └────────┘
-                    │
+                └────┬───────────────────┬───────────────┘
+                     │ HTTP              │ ingest.*
+                     │ (api + SPAs +     │ (HLS read)
+                     │  /health + /metrics)
+                     ▼                   ▼
+                ┌────────┐           ┌────────┐
+                │gateway │           │ minio  │
+                │  :4000 │ ──S3+STS─►│  :9000 │
+                │  :1935 │ ◄──RTMP── │ :9001  │
+                └───┬────┘           └────────┘
+                    │  ▲
+                    │  └── OBS / ffmpeg push RTMP to :1935
         ┌───────────┼─────────────┐
         │           │             │
         ▼           ▼             ▼
@@ -42,26 +45,29 @@ with the three SPAs deployed independently:
                   chain RPC  +  on-chain registry
 ```
 
-The gateway, postgres, rustfs, and the two daemons share a
+The gateway, postgres, minio, and the two daemons share a
 `livepeer-run` volume for UDS sockets.
 
 ---
 
 ## Pre-flight checklist
 
-- [ ] Domain DNS records pointing at the host (api.\*, site.\*,
-      portal.\*, admin.\*, ingest.\*, metrics.\*).
+- [ ] Domain DNS records pointing at the host (e.g. `app.*` or split
+      `api.*`/`portal.*`/`admin.*`, plus `ingest.*` for HLS playback and
+      optionally `metrics.*`).
 - [ ] TLS — Let's Encrypt or your CA of choice.
 - [ ] Postgres data volume backed by durable storage.
-- [ ] RustFS data volume backed by durable storage **with enough
-      headroom for VOD uploads** (size to your traffic).
+- [ ] MinIO data volume backed by durable storage **with enough
+      headroom for VOD uploads + live HLS output** (size to your traffic).
+- [ ] Public RTMP TCP port 1935 reachable (or set `LIVE_RTMP_PORT=0` to
+      disable live ingest).
 - [ ] An EVM JSON-RPC endpoint (Arbitrum One default).
 - [ ] A funded Ethereum keystore for the payer-daemon.
 - [ ] An `AI_SERVICE_REGISTRY_ADDRESS` for the chain you're on.
 - [ ] Resend account + API key (or commit to running without email).
 - [ ] A copy of `.env.example` with every value filled, including
-      `S3_*` for RustFS.
-- [ ] Backups configured (Postgres dumps + RustFS bucket sync).
+      `S3_*` and `MINIO_*`.
+- [ ] Backups configured (Postgres dumps + MinIO bucket replication via `mc mirror`).
 
 ---
 
@@ -74,8 +80,8 @@ The gateway, postgres, rustfs, and the two daemons share a
 | `API_KEY_HASH_PEPPER` | Pepper for API key SHA-256. | `openssl rand -hex 32` |
 | `IP_HASH_PEPPER` | Pepper for IPs / verification / session / stream-key hashes. | `openssl rand -hex 32` |
 | `METRICS_TOKEN` | Bearer token on `/metrics`. | `openssl rand -hex 32` |
-| `RUSTFS_ROOT_PASSWORD` | RustFS root credential. | `openssl rand -base64 32` |
-| `S3_SECRET_ACCESS_KEY` | RustFS-issued access key for the gateway. | `openssl rand -hex 32` |
+| `MINIO_ROOT_PASSWORD` | MinIO root credential. | `openssl rand -base64 32` |
+| `S3_SECRET_ACCESS_KEY` | MinIO-issued access key for the gateway. | `openssl rand -hex 32` |
 | `RESEND_API_KEY` | Email delivery. | from Resend dashboard |
 
 Keep secrets out of git. Use the compose `.env` (git-ignored) or a
@@ -95,7 +101,7 @@ $EDITOR .env  # fill every required value
 # 2. build
 docker compose build gateway
 
-# 3. db + rustfs + bootstrap + gateway
+# 3. db + minio + bootstrap + gateway
 make dev
 
 # 4. plus livepeer daemons
@@ -107,15 +113,18 @@ done end-to-end validation:
 
 1. **Sign up a test user** through the real flow (waitlist → verify →
    admin approve → API key emailed).
-2. **Confirm `/v1/capabilities`** returns a non-empty catalog. Empty →
+2. **Confirm `/api/v1/capabilities`** returns a non-empty catalog. Empty →
    registry-daemon hasn't synced; check its logs.
-3. **POST `/v1/abr`** with a sample MP4 URL or via the
-   `/v1/abr/upload-url` flow against RustFS. Expect a `job_id` +
+3. **POST `/api/v1/abr`** with a sample MP4 URL or via the
+   `/api/v1/abr/upload-url` flow against MinIO. Expect a `job_id` +
    `master_playlist_url`. Wait for the runner to finish, then play the
    master playlist in a player.
-4. **POST `/v1/live`** → push RTMP to the returned ingest URL using
-   OBS or `ffmpeg -re -i input.mp4 -c copy -f flv rtmp://…/<key>`.
-   Confirm the returned HLS URL plays back. `DELETE /v1/live/:id`.
+4. **POST `/api/v1/live`** → push RTMP to the returned ingest URL
+   (`rtmp://<gateway>:1935/live/<key>`) using OBS or
+   `ffmpeg -re -i input.mp4 -c copy -f flv rtmp://…/<key>`. Confirm the
+   returned HLS URL plays back. `DELETE /api/v1/live/:id` (OBS should
+   see the disconnect within ~2s because the gateway closes the RTMP
+   socket synchronously).
 5. **Confirm `usage_reservations`** committed for both flows; `live_streams`
    shows `status='ended'` after deletion.
 
@@ -125,37 +134,54 @@ done end-to-end validation:
 
 The gateway speaks plain HTTP. Put a reverse proxy in front. Same
 shape as `livepeer-modules-openai/DEPLOYMENT.md`; the only delta:
-front RustFS at `ingest.*` so clients can PUT directly.
+front MinIO at `ingest.*` so HLS viewers can fetch directly, and pass
+RTMP traffic on TCP `:1935` either directly or via an L4 proxy (RTMP
+is not HTTP — most reverse proxies need a stream/TCP rule for it).
 
-Disable buffering on `/v1/live/*` if you ever add streaming responses
+Disable buffering on `/api/v1/live/*` if you ever add streaming responses
 (today: poll-only, fine with default buffering).
 
 ---
 
 ## SPA hosting
 
-The three SPAs in `web/` are static. Same options as the openai
-gateway: same-host reverse proxy, CDN / Cloudflare Pages / Netlify /
-Vercel, or object storage + CDN.
+The three SPAs are **embedded into the gateway binary** via `//go:embed`
+under `gateway/internal/server/webroot/`. `make embed-webroot` (also run
+by the Dockerfile) copies `web/{site,portal,admin}` into that path before
+`go build`, so there's no separate static-host or CDN step. Production
+serves `/`, `/portal/`, and `/admin/` from the same port as the API.
 
-Branding: edit `web/site/index.html` + `web/site/index.css`. No
-gateway code touches.
+If you want to front the SPAs with a CDN, point the CDN at the gateway
+host; cache `*.js`/`*.css` aggressively and the HTML lightly.
+
+Branding: edit `web/site/index.html` + `web/site/index.css` and rebuild.
+No gateway code touches.
 
 ---
 
-## RustFS in production
+## MinIO in production
 
-- **Storage class.** RustFS data lives in `video-gateway-rustfs-data`.
+- **Storage class.** MinIO data lives in `video-gateway-minio-data`.
   Mount this on durable storage (EBS, GCE PD, ZFS).
-- **Object lifecycle.** Set a TTL on `abr/` prefixes — the runner
-  reads VOD inputs once; long retention is unnecessary. RustFS
-  supports lifecycle policies through the standard S3 API.
-- **Backups.** RustFS supports replication via `mc mirror`. Mirror
-  the bucket nightly to off-site storage if VOD originals must be
-  retained.
-- **Public read.** Dev compose sets the bucket anonymous-read so the
-  runner can pull. In production, restrict to runner IPs or use
-  signed download URLs (a future plan; see tech-debt-tracker).
+- **Object lifecycle.** Set a TTL on `abr/` and `live-out/` prefixes
+  — the runner reads VOD inputs once, and HLS segments are throwaway
+  once the session ends. Configure lifecycle via `mc ilm import` or
+  the standard S3 API.
+- **Backups.** Replicate the bucket via `mc mirror` (or MinIO's
+  built-in bucket replication) to off-site storage if VOD originals
+  must be retained.
+- **CORS.** The MinIO compose service is configured via the
+  `MINIO_API_CORS_ALLOW_ORIGIN` env var; no separate CORS-bootstrap
+  container.
+- **STS.** Per-live-session credentials are minted via STS
+  `AssumeRole` with an inline policy scoped to
+  `live-out/<api_key>/<live_id>/*`. The runner only gets write access
+  to its own session's prefix. Confirm STS is reachable from the
+  gateway with `mc admin info` and that the bucket policy permits
+  the gateway's service-account access key to call `AssumeRole`.
+- **Public read.** Dev compose leaves the bucket anonymous-read so
+  the runner and viewers can pull. In production, restrict to runner
+  IPs or use signed download URLs (tracked in tech-debt-tracker).
 
 ---
 
@@ -199,7 +225,7 @@ Prometheus scrapes `/metrics`. Surfaces:
 
 Recommended starter alerts:
 
-- 5xx rate above 1% sustained 5 min on `/v1/*`
+- 5xx rate above 1% sustained 5 min on `/api/v1/*`
 - `proxy_reservations_total{outcome="refunded"}` rising sharply vs `committed`
 - `livepeer_gateway_route_health_cooldowns_opened_total` rising
 - `live_streams_active` flatlining when ingest should be flowing
@@ -211,15 +237,16 @@ Recommended starter alerts:
 | Symptom | Likely cause | Where to look |
 |---|---|---|
 | `/health` shows `db: error` | Postgres down or wrong DATABASE_URL | `docker compose logs db` |
-| `/health` shows `rustfs: error` | rustfs container down, or bootstrap failed | `docker compose logs rustfs rustfs-bootstrap` |
+| `/health` shows `minio: error` | minio container down, or bootstrap failed | `docker compose logs minio minio-bootstrap` |
+| `/health` shows `rtmp: error` | RTMP listener didn't bind to `LIVE_RTMP_PORT` (port in use, perms) | `docker compose logs gateway` |
 | `/health` shows `payer: error` | Payer-daemon not running or socket path mismatch | `docker compose logs payer-daemon` |
 | `/health` shows `registry: error` | Registry-daemon not running, or chain RPC unreachable | `docker compose logs service-registry-daemon` |
-| `/v1/capabilities` returns `data: []` | No transcode capabilities advertised on-chain, or registry-daemon hasn't synced | Registry-daemon logs; wait one refresh cycle |
-| `/v1/abr/upload-url` returns 503 | RustFS unreachable or credentials wrong | `docker compose logs rustfs gateway` |
-| `/v1/live` returns 502 | No broker advertising `livepeer:transcode/live-rtmp-hls-abr` | Registry-daemon logs |
-| RTMP push immediately drops | Broker tore down session (balance exhausted, bad stream key) | Broker logs (operator side) + gateway logs filtered by `live_id` |
+| `/api/v1/capabilities` returns `data: []` | No transcode capabilities advertised on-chain, or registry-daemon hasn't synced | Registry-daemon logs; wait one refresh cycle |
+| `/api/v1/abr/upload-url` returns 503 | MinIO unreachable or credentials wrong | `docker compose logs minio gateway` |
+| `/api/v1/live` returns 502 | No broker advertising `video:transcode.live` with offering `gateway-ingest` | Registry-daemon logs |
+| RTMP push immediately drops | Stream key didn't match `live_streams.stream_key_hash`, or upstream broker tore down session | Broker logs (operator side) + gateway logs filtered by `live_id` |
 | Verification emails not arriving | RESEND_API_KEY missing/invalid | gateway logs — `verification email send failed` |
-| `/v1/abr` jobs sit at `processing` forever, never produce `master.m3u8` | Almost always orchestrator-side: runner's CUDA toolkit > host's NVIDIA driver, or unpatched NVENC session cap exhausted. Gateway is blind because the broker doesn't pass-through runner status. | [`docs/troubleshooting/runner-cuda-driver-mismatch.md`](./docs/troubleshooting/runner-cuda-driver-mismatch.md) |
+| `/api/v1/abr` jobs sit at `processing` forever, never produce `master.m3u8` | Almost always orchestrator-side: runner's CUDA toolkit > host's NVIDIA driver, or unpatched NVENC session cap exhausted. Gateway is blind because the broker doesn't pass-through runner status. | [`docs/troubleshooting/runner-cuda-driver-mismatch.md`](./docs/troubleshooting/runner-cuda-driver-mismatch.md) |
 
 ---
 

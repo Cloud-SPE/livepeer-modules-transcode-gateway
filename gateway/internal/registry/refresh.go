@@ -148,7 +148,7 @@ func parseBig(s string) *big.Int {
 func guessInteractionMode(capability string) string {
 	switch {
 	case isLive(capability):
-		return "live-session-remote-runner@v0"
+		return "live-session-gateway-ingest@v0"
 	default:
 		return "http-reqresp@v0"
 	}

@@ -1,11 +1,11 @@
 # Payment flow
 
-How `Livepeer-Payment` envelopes get minted for `/v1/*` requests.
+How `Livepeer-Payment` envelopes get minted for `/api/v1/*` requests.
 
 ## VOD (single-attempt)
 
 ```
-client → POST /v1/abr
+client → POST /api/v1/abr
   gateway opens usage_reservations
   gateway calls Resolver.SelectMany(capability=livepeer:transcode/abr-ladder)
   for each candidate (loop):
@@ -27,7 +27,7 @@ reports actual work).
 ## Live (session-bound)
 
 ```
-client → POST /v1/live
+client → POST /api/v1/live
   gateway opens long-lived usage_reservations + live_streams (status='provisioning')
   gateway calls Resolver.SelectMany(capability=video:transcode.live)
   pick top candidate (no failover on session-open — live can't retry mid-handshake)
@@ -42,14 +42,14 @@ during the session:
   broker debits the payment session via payment-daemon as work-units accrue
   if balance is exhausted → broker tears down RTMP → live_streams.status='ended'
 
-client → DELETE /v1/live/:id
+client → DELETE /api/v1/live/:id
   gateway calls broker.CloseSession
   gateway settles via payment-daemon
   gateway updates live_streams.status='ended', usage_reservations.state='committed'
 ```
 
 Live streams do **not** failover on broker failure mid-session.
-Restarting requires a fresh `POST /v1/live` — that's a client
+Restarting requires a fresh `POST /api/v1/live` — that's a client
 responsibility.
 
 ## What lives where

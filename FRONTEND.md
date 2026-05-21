@@ -9,8 +9,24 @@ zero-build: no Vite, no esbuild, no bundler. Dependencies load via
 `<script type="importmap">` from [esm.sh](https://esm.sh/).
 
 Why: agents can edit and reload without a build step. The runtime is
-the source. A small `dev-server.js` per SPA serves static files and
-proxies `/api/*`, `/portal/*`, `/admin/*`, and `/v1/*` to the gateway.
+the source.
+
+## Production vs dev serving
+
+- **Production.** The three SPAs are embedded into the gateway binary
+  via `//go:embed`. `make embed-webroot` (also run by the Dockerfile)
+  copies `web/{site,portal,admin}` into
+  `gateway/internal/server/webroot/`. The gateway serves `/` (site),
+  `/portal/` (portal), `/admin/` (admin) from that embedded FS, plus
+  the API at `/api/*`, on a single port (default `4000`).
+  Bare `/portal` and `/admin` 301 to the trailing-slash form.
+- **Dev.** `make web` starts a per-SPA `dev-server.js` so each SPA
+  hot-reloads on its own port (3000/3001/3002). Each dev server
+  proxies `/api/*` to the gateway at `:4000` so the SPAs see the same
+  API surface in both modes.
+
+Asset paths inside SPA component imports use `../lib/api.js` (relative)
+so they resolve correctly against the SPA mount point in both modes.
 
 ## DOM invariants
 
@@ -75,15 +91,20 @@ product name. Rebrand by editing `site/index.html` + `site/index.css`
 The portal's playground (`web/portal/components/cc-playground.js`)
 exposes **two tabs**:
 
-- **Live** — POST `/v1/live` → render `rtmp://…` + stream key + OBS
+- **Live** — POST `/api/v1/live` → render `rtmp://…` + stream key + OBS
   hint → embed `<video>` playing the returned HLS URL via `hls.js`
-  loaded from esm.sh. Stop/delete control wired to `DELETE /v1/live/:id`.
-- **Transcode** — drag/drop file → POST `/v1/abr/upload-url` →
-  PUT bytes to RustFS → POST `/v1/abr` → poll job → play master
-  playlist when ready, with a rendition selector.
+  loaded from esm.sh. Stop/delete control wired to
+  `DELETE /api/v1/live/:id`.
+- **Transcode** — drag/drop file → POST `/api/v1/abr/upload-url` →
+  PUT bytes to MinIO → POST `/api/v1/abr` → poll job → play master
+  playlist when ready. Succeeded rows expose **Copy URL** (master
+  playlist) and a `▸ N variants` toggle that expands per-rendition
+  rows with **Play this one** + **Copy URL** per variant. Failed rows
+  render an inline sub-row that surfaces the runner's raw `error_code`
+  and `error` strings verbatim — there is no translation layer.
 
 Both tabs use the user's API key from the cookie session indirectly
-(the portal calls `/v1/*` with the bearer key the user pasted at
+(the portal calls `/api/v1/*` with the bearer key the user pasted at
 login).
 
 ## Accessibility

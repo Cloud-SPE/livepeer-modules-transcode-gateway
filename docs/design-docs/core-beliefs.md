@@ -64,13 +64,13 @@ a signal that scope has crept and we should reconsider.
 
 There is no `LIVEPEER_STATIC_OVERLAY_*` env-var path. There is no
 hand-rolled "if no orchestrators advertise, fall back to localhost".
-`/v1/*` 502s when the registry has no candidates, and that's correct
-— the gateway is a thin window onto the Livepeer network's actual
-state.
+`/api/v1/*` 502s when the registry has no candidates, and that's
+correct — the gateway is a thin window onto the Livepeer network's
+actual state.
 
 ## 8. Capabilities reflect reality
 
-`/v1/capabilities` returns what the resolver advertises *right now*,
+`/api/v1/capabilities` returns what the resolver advertises *right now*,
 refreshed every `REGISTRY_REFRESH_INTERVAL_MS`. There is no hand-
 curated catalog. If a capability disappears on-chain, it disappears
 from the API within one refresh cycle.

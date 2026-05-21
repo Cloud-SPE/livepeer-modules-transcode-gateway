@@ -19,7 +19,7 @@ Together they're under 600 lines.
 ```bash
 # Go toolchain (1.25+) and Node 24 + pnpm 10 required.
 pnpm install
-make dev               # gateway + db + rustfs + bootstrap
+make dev               # gateway + db + minio + bootstrap
 make dev-livepeer      # adds payer + resolver daemons
 
 # Run the three SPAs (each in its own terminal, or one command)
@@ -32,7 +32,7 @@ make smoke
 You don't need a Resend account for local dev. When `RESEND_API_KEY`
 is unset, verification + API-key emails are logged to stdout.
 
-For a fully working `/v1/*` stack you do need: chain RPC, registry
+For a fully working `/api/v1/*` stack you do need: chain RPC, registry
 address, payer keystore. This repo is on-chain only; there is no
 local fallback broker mode.
 
@@ -89,8 +89,8 @@ how to scope.
 ## Commit style
 
 - Subject line: imperative, ≤72 chars. Examples:
-  - `fix: refund usage_reservation on /v1/abr broker timeout`
-  - `gateway: add /admin/live-streams CSV export`
+  - `fix: refund usage_reservation on /api/v1/abr broker timeout`
+  - `gateway: add /api/admin/live-streams CSV export`
   - `docs: tighten core-beliefs §3 wording`
 - Body wraps ~72 chars; explains *why*.
 - Link issues / plan files as relative paths from repo root.

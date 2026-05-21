@@ -20,10 +20,10 @@ in spirit; the Go shape is different.
    works without VOD ingest).
 5. **Wire gRPC clients.** Best-effort dial to
    `LIVEPEER_RESOLVER_SOCKET` and `LIVEPEER_PAYER_DAEMON_SOCKET`.
-   Missing sockets log a warning; `/v1/*` returns 500/503 at request
+   Missing sockets log a warning; `/api/v1/*` returns 500/503 at request
    time until they're reachable.
 6. **Start RegistryCatalog refresh loop.** First refresh runs
-   synchronously so `/v1/capabilities` is non-empty by the time the
+   synchronously so `/api/v1/capabilities` is non-empty by the time the
    server accepts traffic. Subsequent refreshes run on a `time.Ticker`
    every `REGISTRY_REFRESH_INTERVAL_MS`.
 7. **Construct ServerDeps.** A single struct threaded into every

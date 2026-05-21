@@ -13,9 +13,14 @@ import (
 	"github.com/google/uuid"
 )
 
-// Wire types for the live-session-remote-runner@v0 mode. See
-// livepeer-network-protocol/modes/live-session-remote-runner.md for the
-// authoritative spec. Field names mirror the JSON wire shape exactly.
+// Wire types for the live transcode broker surface. The live mode the
+// gateway speaks today is live-session-gateway-ingest@v0 (defined below
+// under the "live-session-gateway-ingest@v0 wire types" header). The
+// shared types in this section (LiveLadderRung / LiveOpenParams /
+// LiveTopUpRequest / LiveGetResponse / LiveEndRequest etc.) originated
+// in the legacy live-session-remote-runner@v0 spec and are still used
+// for the GET / topup / end endpoints under /v1/cap/{bsess}/*, which
+// both modes share. Field names mirror the JSON wire shape exactly.
 
 // LiveLadderRung is one rendition spec in the session-open request body.
 type LiveLadderRung struct {
@@ -149,7 +154,9 @@ type LiveEndResponse struct {
 
 // ── live-session-gateway-ingest@v0 wire types (plan 0003) ──
 //
-// Differs from live-session-remote-runner@v0 in three places:
+// Differs from the legacy live-session-remote-runner@v0 in three places
+// (kept here for historical context — gateway-ingest is the only live
+// mode this gateway speaks today):
 //   - request body carries `output_credential` (S3 write creds for runner)
 //     and `ingest_accept.stream_key` (so runner can authenticate the
 //     gateway's upstream RTMP push)

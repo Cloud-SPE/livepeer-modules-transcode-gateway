@@ -48,7 +48,7 @@ before making load-bearing decisions.
 
 | Path | What it is |
 |---|---|
-| [`gateway/`](./gateway/) | Go backend — single binary: transcode `/v1/*` API (`/v1/abr`, `/v1/live`, …), waitlist + auth + admin SaaS shell, gRPC clients to `service-registry-daemon` + `payment-daemon`, S3 presign client to RustFS. |
+| [`gateway/`](./gateway/) | Go backend — single binary: transcode `/api/v1/*` API (`/api/v1/abr`, `/api/v1/live`, …), waitlist + auth + admin SaaS shell, gRPC clients to `service-registry-daemon` + `payment-daemon`, S3 + STS client to MinIO, RTMP ingest listener on `:1935`, and the three SPAs embedded via `//go:embed`. |
 | [`web/site/`](./web/site/) | Zero-build Lit marketing site + waitlist signup. |
 | [`web/portal/`](./web/portal/) | Zero-build Lit user dashboard (account, API keys, playground with Live + Transcode tabs). |
 | [`web/admin/`](./web/admin/) | Zero-build Lit admin (waitlist queue, users, usage, transcode-capability registry). |
@@ -66,17 +66,19 @@ before making load-bearing decisions.
 - **Zero-build SPAs.** `web/` apps use Lit + `esm.sh` importmaps + a
   per-app `dev-server.js`. No Vite, no bundler. See
   [`FRONTEND.md`](./FRONTEND.md) for DOM/CSS invariants.
-- **Gateway pays the network.** Every `/v1/*` request mints a
+- **Gateway pays the network.** Every `/api/v1/*` request mints a
   `Livepeer-Payment` envelope via `payment-daemon`. Live streams mint
   on session open and interim-debit during the session.
 - **Capabilities come from the service registry.** No hardcoded
-  capability list. `/v1/capabilities` reflects what the on-chain
+  capability list. `/api/v1/capabilities` reflects what the on-chain
   registry advertises.
 - **No Stripe, no billing, no rate cards in v1.** Auth shape is
   waitlist → email verify → admin approval → API key by email.
-- **VOD ingest lands in RustFS.** The compose stack stands up an
-  S3-compatible RustFS, a one-shot bootstrap container creates the
-  bucket + access key, the gateway presigns PUTs for VOD upload.
+- **VOD ingest lands in MinIO.** The compose stack stands up MinIO
+  (S3-compatible) and a one-shot bootstrap container that creates the
+  bucket + access key; the gateway presigns PUTs for VOD upload. Live
+  sessions get per-session credentials via MinIO STS `AssumeRole`,
+  scoped by inline policy to `live-out/<api>/<sess>/*`.
 - **Capability workers (abr-runner, capability-broker) are external.**
   This repo talks to the Livepeer network; it does not carry runner
   implementations.
