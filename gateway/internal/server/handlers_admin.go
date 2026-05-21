@@ -58,9 +58,6 @@ func RegisterAdmin(api huma.API, deps Deps) {
 		if err != nil || wl == nil {
 			return nil, huma.Error404NotFound("waitlist row not found")
 		}
-		if wl.EmailVerifiedAt == nil {
-			return nil, huma.Error409Conflict("email_not_verified")
-		}
 		if wl.Status != repo.WaitlistPending {
 			return nil, huma.Error409Conflict("waitlist_not_pending")
 		}
@@ -86,6 +83,7 @@ func RegisterAdmin(api huma.API, deps Deps) {
 		out := &AdminApproveOut{}
 		out.Body.OK = true
 		out.Body.KeyPrefix = prefix
+		out.Body.PlainKey = key
 		return out, nil
 	})
 
@@ -712,6 +710,7 @@ type AdminApproveOut struct {
 	Body struct {
 		OK        bool   `json:"ok"`
 		KeyPrefix string `json:"key_prefix"`
+		PlainKey  string `json:"plain_key,omitempty"`
 	}
 }
 

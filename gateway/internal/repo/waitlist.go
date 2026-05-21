@@ -116,7 +116,7 @@ func (r *WaitlistRepo) MarkRejected(ctx context.Context, id uuid.UUID, approver 
 
 func (r *WaitlistRepo) ResetVerificationToken(ctx context.Context, id uuid.UUID, tokenHash string, expires time.Time) error {
 	const q = `UPDATE waitlist
-	           SET verification_token_hash=$2, verification_token_expires_at=$3, email_verified_at=NULL
+	           SET verification_token_hash=$2, verification_token_expires_at=$3
 	           WHERE id=$1`
 	_, err := r.pool.Exec(ctx, q, id, tokenHash, expires)
 	return err
@@ -141,4 +141,3 @@ func nullable(s string) any {
 	}
 	return s
 }
-

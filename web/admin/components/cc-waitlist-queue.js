@@ -3,10 +3,11 @@ import { api } from '../lib/api.js';
 
 class CcWaitlistQueue extends LitElement {
   static properties = {
-    items: { state: true },
-    filter: { state: true },
-    error: { state: true },
-    busyID: { state: true },
+    items:       { state: true },
+    filter:      { state: true },
+    error:       { state: true },
+    busyID:      { state: true },
+    approvedKey: { state: true },
   };
 
   constructor() {
@@ -15,6 +16,7 @@ class CcWaitlistQueue extends LitElement {
     this.filter = 'pending';
     this.error = '';
     this.busyID = '';
+    this.approvedKey = null;
   }
 
   createRenderRoot() { return this; }
@@ -36,8 +38,12 @@ class CcWaitlistQueue extends LitElement {
   async #approve(id) {
     this.busyID = id;
     this.error = '';
+    this.approvedKey = null;
     try {
-      await api(`/admin/waitlist/${id}/approve`, { method: 'POST' });
+      const out = await api(`/admin/waitlist/${id}/approve`, { method: 'POST' });
+      this.approvedKey = out?.plain_key
+        ? { id, key: out.plain_key, prefix: out.key_prefix ?? '' }
+        : null;
       await this.#load();
     } catch (err) {
       this.error = err.message;
@@ -69,6 +75,13 @@ class CcWaitlistQueue extends LitElement {
       <div class="card">
         <h2>Waitlist</h2>
         <p class="msg">Filter and act on signups.</p>
+        ${this.approvedKey
+          ? html`<p class="msg">
+              Approved. One-time API key:
+              <code>${this.approvedKey.key}</code>
+              ${this.approvedKey.prefix ? html`<span>(${this.approvedKey.prefix}…)</span>` : ''}
+            </p>`
+          : ''}
         <select @change=${(e) => { this.filter = e.target.value; void this.#load(); }}>
           <option value="pending">Pending</option>
           <option value="approved">Approved</option>
@@ -93,7 +106,7 @@ class CcWaitlistQueue extends LitElement {
                     <td>
                       ${r.status === 'pending'
                         ? html`
-                          <button class="primary" ?disabled=${!r.email_verified_at || this.busyID === r.id}
+                          <button class="primary" ?disabled=${this.busyID === r.id}
                                   @click=${() => this.#approve(r.id)}>Approve</button>
                           <button class="ghost danger" @click=${() => this.#reject(r.id)}>Reject</button>
                           <button class="ghost" @click=${() => this.#resend(r.id)}>Resend</button>`
