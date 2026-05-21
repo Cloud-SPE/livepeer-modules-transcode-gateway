@@ -133,7 +133,11 @@ docker-publish:
 		echo "refusing to publish :dev — set TAG (e.g. make docker-publish TAG=v1.3.0)"; \
 		exit 1; \
 	fi
-	docker buildx build \
+	@# Default Docker driver doesn't support multi-arch — ensure a
+	@# docker-container buildx builder exists for cross-arch builds.
+	@docker buildx inspect multiarch >/dev/null 2>&1 || \
+		docker buildx create --name multiarch --driver docker-container --bootstrap
+	docker buildx build --builder multiarch \
 		--platform linux/amd64,linux/arm64 \
 		--push \
 		-t $(IMAGE):$(TAG) \
