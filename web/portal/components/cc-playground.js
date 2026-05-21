@@ -40,6 +40,8 @@ class CcPlayground extends LitElement {
     activeUploadID:   { state: true },
     uploading:        { state: true },
     uploadPct:        { state: true },
+    expandedJobs:     { state: true },  // Set<uploadId> with variants visible
+    copiedURL:        { state: true },  // last URL copied (for transient feedback)
   };
 
   constructor() {
@@ -57,6 +59,8 @@ class CcPlayground extends LitElement {
     this.activeUploadID = '';
     this.uploading      = false;
     this.uploadPct      = 0;
+    this.expandedJobs   = new Set();
+    this.copiedURL      = '';
     this._hls           = null;
     this._pollers       = new Map(); // uploadId -> intervalId
   }
@@ -261,6 +265,9 @@ Stream Key: ${s.ingest.stream_key}</pre>
     const failed = status === 'failed';
     const errCode = u.job?.error_code || '';
     const errText = u.job?.error || '';
+    const masterURL = u.job?.master_playlist_url || '';
+    const renditions = u.job?.renditions || [];
+    const expanded = this.expandedJobs.has(u.id);
     return html`<tr>
       <td>${u.filename}
         ${u.duration_seconds
@@ -271,8 +278,17 @@ Stream Key: ${s.ingest.stream_key}</pre>
       <td>${u.job?.id ? html`<code>${u.job.id.slice(0, 8)}…</code>` : html`<span class="msg">—</span>`}</td>
       <td><span class="pill ${done ? 'ok' : failed ? 'warn' : ''}">${status}</span></td>
       <td>
-        ${done && u.job?.master_playlist_url
-          ? html`<button class="ghost" @click=${() => this.#play(u.id)}>Play</button>`
+        ${done && masterURL
+          ? html`<button class="ghost" @click=${() => this.#play(u.id)}>Play</button>
+                 <button class="ghost" @click=${() => this.#copyURL(masterURL)}
+                         title="Copy master playlist URL to clipboard">
+                   ${this.copiedURL === masterURL ? 'Copied' : 'Copy URL'}
+                 </button>`
+          : ''}
+        ${done && renditions.length > 0
+          ? html`<button class="ghost" @click=${() => this.#toggleVariants(u.id)}>
+                   ${expanded ? '▾' : '▸'} ${renditions.length} variants
+                 </button>`
           : ''}
         ${this.abrOnline && !done
           ? html`<button class="primary" @click=${() => this.#submitJob(u.id)}>
@@ -292,7 +308,46 @@ Stream Key: ${s.ingest.stream_key}</pre>
               ? html`<span class="msg">Transcode failed. No detail reported by the runner.</span>`
               : ''}
         </td></tr>`
+      : ''}
+    ${expanded && done
+      ? renditions.map((r) => html`<tr class="variant-row"><td colspan="5">
+          <span class="variant-name">${r.name}</span>
+          <span class="msg">${formatBitrate(r.bandwidth)}</span>
+          <button class="ghost" @click=${() => this.#playURL(u.id, r.playlist_url)}>Play this one</button>
+          <button class="ghost" @click=${() => this.#copyURL(r.playlist_url)}
+                  title="Copy variant playlist URL to clipboard">
+            ${this.copiedURL === r.playlist_url ? 'Copied' : 'Copy URL'}
+          </button>
+        </td></tr>`)
       : ''}`;
+  }
+
+  #toggleVariants(uploadId) {
+    const next = new Set(this.expandedJobs);
+    if (next.has(uploadId)) next.delete(uploadId);
+    else next.add(uploadId);
+    this.expandedJobs = next;
+  }
+
+  async #copyURL(url) {
+    if (!url) return;
+    try {
+      await navigator.clipboard.writeText(url);
+      this.copiedURL = url;
+      setTimeout(() => {
+        if (this.copiedURL === url) this.copiedURL = '';
+        this.requestUpdate();
+      }, 1500);
+    } catch (err) {
+      this.error = `Couldn't copy to clipboard: ${err.message}`;
+    }
+  }
+
+  async #playURL(uploadId, url) {
+    if (!url) return;
+    this.activeUploadID = uploadId;
+    await this.updateComplete;
+    this.#attachHls(url);
   }
 
   #renderOfflineNotice(cap, friendly) {
@@ -542,6 +597,14 @@ function formatDuration(sec) {
   const m = Math.floor(sec / 60);
   const s = sec % 60;
   return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+// Render an HLS variant bandwidth (bits/sec) as a human-readable rate.
+// HLS BANDWIDTH attributes are peak bits/sec including container overhead.
+function formatBitrate(bps) {
+  if (!bps || bps < 0) return '';
+  if (bps < 1_000_000) return `~${Math.round(bps / 1000)} kbps`;
+  return `~${(bps / 1_000_000).toFixed(1)} Mbps`;
 }
 
 function readUploads() {

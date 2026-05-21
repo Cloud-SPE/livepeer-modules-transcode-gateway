@@ -94,6 +94,26 @@
     font-size: 13px;
   }
   tr.error-row code { color: var(--danger); }
+
+  /* Sub-row under a succeeded transcode row — one row per variant.
+     Same visual containment pattern as .error-row so the rendition
+     list visibly belongs to the job above. */
+  tr.variant-row td {
+    background: var(--surface-2);
+    border-top: 0;
+    padding-top: 6px;
+    padding-bottom: 6px;
+    padding-left: 24px;
+    font-size: 13px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  tr.variant-row .variant-name {
+    font-family: ui-monospace, 'SF Mono', Consolas, monospace;
+    color: var(--accent);
+    min-width: 60px;
+  }
   table { width: 100%; border-collapse: collapse; font-size: 14px; table-layout: auto; }
   th, td { text-align: left; padding: 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
   th { color: var(--muted); font-weight: 500; }
