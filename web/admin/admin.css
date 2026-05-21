@@ -68,9 +68,19 @@
     border: 1px solid var(--border); border-radius: var(--radius); color: var(--fg);
   }
 
-  table { width: 100%; border-collapse: collapse; font-size: 14px; }
-  th, td { text-align: left; padding: 8px; border-bottom: 1px solid var(--border); }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; table-layout: auto; }
+  th, td { text-align: left; padding: 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
   th { color: var(--muted); font-weight: 500; }
+  /* Long URLs, eth addresses, and UUIDs in <code> tags inside tables
+     have no natural break points and would otherwise push columns
+     past the card. overflow-wrap: anywhere lets them break on any
+     character; min-width: 0 lets the cell shrink below its content. */
+  td code, th code { overflow-wrap: anywhere; word-break: break-word; }
+  td, th { min-width: 0; }
+
+  /* Last-resort scroll for any card whose contents still overflow.
+     Cards stack vertically so per-card horizontal scroll is safe. */
+  .card { overflow-x: auto; }
 
   .msg { color: var(--muted); font-size: 14px; }
   .msg.error { color: var(--danger); }

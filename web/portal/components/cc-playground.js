@@ -259,6 +259,8 @@ Stream Key: ${s.ingest.stream_key}</pre>
     const status = u.job?.status || 'not submitted';
     const done   = status === 'succeeded';
     const failed = status === 'failed';
+    const errCode = u.job?.error_code || '';
+    const errText = u.job?.error || '';
     return html`<tr>
       <td>${u.filename}
         ${u.duration_seconds
@@ -279,7 +281,18 @@ Stream Key: ${s.ingest.stream_key}</pre>
           : ''}
         <button class="ghost danger" @click=${() => this.#removeUpload(u.id)}>Delete</button>
       </td>
-    </tr>`;
+    </tr>
+    ${failed
+      ? html`<tr class="error-row"><td colspan="5">
+          ${errCode ? html`<code>${errCode}</code>` : ''}
+          ${errCode && errText ? html`<br>` : ''}
+          ${errText
+            ? html`<span class="msg">${errText}</span>`
+            : !errCode
+              ? html`<span class="msg">Transcode failed. No detail reported by the runner.</span>`
+              : ''}
+        </td></tr>`
+      : ''}`;
   }
 
   #renderOfflineNotice(cap, friendly) {
