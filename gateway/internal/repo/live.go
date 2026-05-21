@@ -25,6 +25,7 @@ const liveSelectCols = `id, api_key_id, reservation_id, name, status, capability
 	ladder_json, error_text,
 	broker_session_id, runner_session_id, broker_work_id, close_reason, last_broker_sync_at,
 	s3_output_prefix, private_ingest_url, stream_key_hint,
+	runner_status_json,
 	created_at, started_at, last_heartbeat_at, ended_at`
 
 type InsertLiveInput struct {
@@ -156,6 +157,11 @@ type ReconcileSnapshot struct {
 	CloseReason string
 	Heartbeat   *time.Time // when broker says session was last seen
 	EndedAt     *time.Time // when broker says session ended (terminal states only)
+	// RunnerStatusJSON is the broker's runner-status surface as raw
+	// bytes (ingest + output blocks per the status-hardening spec).
+	// Nil when the broker didn't include them; the column accepts NULL
+	// and the admin UI handles missing fields gracefully.
+	RunnerStatusJSON []byte
 }
 
 func (r *LiveRepo) RecordBrokerSync(ctx context.Context, id uuid.UUID, snap ReconcileSnapshot) error {
@@ -165,10 +171,12 @@ func (r *LiveRepo) RecordBrokerSync(ctx context.Context, id uuid.UUID, snap Reco
 	               close_reason        = COALESCE(NULLIF($4, ''), close_reason),
 	               last_heartbeat_at   = COALESCE($5, last_heartbeat_at),
 	               ended_at            = COALESCE($6, ended_at),
+	               runner_status_json  = COALESCE($7, runner_status_json),
 	               last_broker_sync_at = now()
 	           WHERE id = $1`
 	_, err := r.pool.Exec(ctx, q, id,
-		string(snap.Status), snap.PlaybackURL, snap.CloseReason, snap.Heartbeat, snap.EndedAt)
+		string(snap.Status), snap.PlaybackURL, snap.CloseReason, snap.Heartbeat, snap.EndedAt,
+		snap.RunnerStatusJSON)
 	return err
 }
 
@@ -271,6 +279,7 @@ func scanLive(s pgx.Row) (*LiveStream, error) {
 		&l.LadderJSON, &l.ErrorText,
 		&l.BrokerSessionID, &l.RunnerSessionID, &l.BrokerWorkID, &l.CloseReason, &l.LastBrokerSyncAt,
 		&l.S3OutputPrefix, &l.PrivateIngestURL, &l.StreamKeyHint,
+		&l.RunnerStatusJSON,
 		&l.CreatedAt, &l.StartedAt, &l.LastHeartbeatAt, &l.EndedAt)
 	if err != nil {
 		return nil, err

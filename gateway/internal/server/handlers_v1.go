@@ -743,6 +743,21 @@ func reconcileLiveSession(ctx context.Context, deps Deps, live *repo.LiveStream)
 			snap.EndedAt = &t
 		}
 	}
+	// Persist the runner's status-hardening surface (ingest + output)
+	// when present so the admin UI can render it without polling the
+	// broker per page load. Both blocks are optional from the broker.
+	if resp.Ingest != nil || resp.Output != nil {
+		runnerStatus := map[string]any{}
+		if resp.Ingest != nil {
+			runnerStatus["ingest"] = resp.Ingest
+		}
+		if resp.Output != nil {
+			runnerStatus["output"] = resp.Output
+		}
+		if b, mErr := json.Marshal(runnerStatus); mErr == nil {
+			snap.RunnerStatusJSON = b
+		}
+	}
 	if err := deps.Live.RecordBrokerSync(ctx, live.ID, snap); err != nil {
 		deps.Log.Warn("live reconcile: persist failed", "live_id", live.ID, "err", err)
 		return nil

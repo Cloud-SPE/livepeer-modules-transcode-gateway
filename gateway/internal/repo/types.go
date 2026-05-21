@@ -125,6 +125,10 @@ type LiveStream struct {
 	StartedAt         *time.Time
 	LastHeartbeatAt   *time.Time
 	EndedAt           *time.Time
+	// RunnerStatusJSON is the raw runner-status surface the broker most
+	// recently reported (ingest + output blocks). Nil if absent. Admin
+	// UI parses opportunistically; the gateway never interprets it.
+	RunnerStatusJSON  []byte
 }
 
 type Capability struct {

@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"time"
 
@@ -340,7 +341,7 @@ func registerAdminLiveStreams(api huma.API, deps Deps) {
 		}
 		out := &AdminLiveStreamsOut{}
 		for _, r := range rows {
-			out.Body.Items = append(out.Body.Items, AdminLiveStreamView{
+			item := AdminLiveStreamView{
 				ID:              r.ID,
 				APIKeyID:        r.APIKeyID,
 				Name:            derefString(r.Name),
@@ -356,7 +357,16 @@ func registerAdminLiveStreams(api huma.API, deps Deps) {
 				StartedAt:       r.StartedAt,
 				LastHeartbeatAt: r.LastHeartbeatAt,
 				EndedAt:         r.EndedAt,
-			})
+			}
+			// Surface the broker's runner-status surface (ingest +
+			// output blocks per status-hardening spec) so operators
+			// can see ConnectedPublisher / PutFailureCount / etc.
+			// without doing a broker round-trip. Reconciler caches
+			// this on each tick; admin UI parses what's present.
+			if len(r.RunnerStatusJSON) > 0 {
+				item.RunnerStatus = json.RawMessage(r.RunnerStatusJSON)
+			}
+			out.Body.Items = append(out.Body.Items, item)
 		}
 		return out, nil
 	})
@@ -597,6 +607,11 @@ type AdminLiveStreamView struct {
 	StartedAt       *time.Time `json:"started_at,omitempty"`
 	LastHeartbeatAt *time.Time `json:"last_heartbeat_at,omitempty"`
 	EndedAt         *time.Time `json:"ended_at,omitempty"`
+	// RunnerStatus is the broker's runner-status surface — ingest +
+	// output blocks per the status-hardening spec. Cached by the
+	// reconciler each tick. Shape is intentionally loose because the
+	// fields evolve faster than gateway schema.
+	RunnerStatus json.RawMessage `json:"runner_status,omitempty"`
 }
 
 type AdminLiveStreamsOut struct {

@@ -103,6 +103,33 @@ type LiveGetResponse struct {
 	// broker emits it on top-up; reconciler reads it opportunistically
 	// when present so we can estimate runway between top-ups too.
 	Balance *LiveTopUpBalance `json:"balance,omitempty"`
+	// Ingest + Output are the runner's status-hardening surface (see
+	// docs/exec-plans/active/runner-status-hardening.md). All fields
+	// are optional — older brokers / runners may omit them. The
+	// reconciler surfaces these to the admin UI without interpreting
+	// them; operators see whatever the broker reports.
+	Ingest *LiveIngestStatus `json:"ingest,omitempty"`
+	Output *LiveOutputStatus `json:"output,omitempty"`
+}
+
+// LiveIngestStatus is the runner's per-session RTMP ingest health.
+type LiveIngestStatus struct {
+	ListenerBound      bool   `json:"listener_bound"`
+	Authenticated      bool   `json:"authenticated"`
+	StreamKeySuffix    string `json:"stream_key_suffix,omitempty"`
+	ConnectedPublisher bool   `json:"connected_publisher"`
+	LastPacketAt       string `json:"last_packet_at,omitempty"`
+}
+
+// LiveOutputStatus is the runner's S3 upload health.
+type LiveOutputStatus struct {
+	Mode              string `json:"mode,omitempty"`
+	TargetPrefix      string `json:"target_prefix,omitempty"`
+	LastManifestPutAt string `json:"last_manifest_put_at,omitempty"`
+	LastSegmentPutAt  string `json:"last_segment_put_at,omitempty"`
+	PutSuccessCount   uint64 `json:"put_success_count"`
+	PutFailureCount   uint64 `json:"put_failure_count"`
+	LastPutError      string `json:"last_put_error,omitempty"`
 }
 
 // LiveEndRequest is the POST /v1/cap/{bsess}/end body. The reason is
