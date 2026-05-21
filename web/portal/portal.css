@@ -82,9 +82,29 @@
   .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; }
   .pill.ok { background: rgba(76, 217, 123, 0.12); color: var(--accent); }
   .pill.warn { background: rgba(255, 122, 122, 0.12); color: var(--danger); }
-  table { width: 100%; border-collapse: collapse; font-size: 14px; }
-  th, td { text-align: left; padding: 8px; border-bottom: 1px solid var(--border); }
+
+  /* Sub-row under a failed transcode row — shows whatever error fields
+     the runner sent (error_code + error text), nothing translated or
+     editorialized. Lighter border so it visibly belongs to the row above. */
+  tr.error-row td {
+    background: rgba(255, 122, 122, 0.06);
+    border-top: 0;
+    padding-top: 0;
+    padding-left: 24px;
+    font-size: 13px;
+  }
+  tr.error-row code { color: var(--danger); }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; table-layout: auto; }
+  th, td { text-align: left; padding: 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
   th { color: var(--muted); font-weight: 500; }
+  /* Long URLs, IDs, and hashes in <code> tags shouldn't push column
+     widths past the card. overflow-wrap: anywhere lets them break on
+     any character; min-width: 0 lets the cell shrink. */
+  td code, th code { overflow-wrap: anywhere; word-break: break-word; }
+  td, th { min-width: 0; }
+
+  /* Last-resort scroll for any card whose contents still overflow. */
+  .card { overflow-x: auto; }
 
   .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 16px; }
   .tabs button {
