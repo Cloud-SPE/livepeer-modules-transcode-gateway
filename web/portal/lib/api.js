@@ -1,4 +1,16 @@
 // Portal API wrapper. Uses cookie sessions (credentials: include).
+//
+// All gateway API routes live under /api/*. Legacy unprefixed paths
+// (/v1/..., /portal/...) are auto-prefixed so existing call sites
+// keep working without a sweep through every component. /health stays
+// at the root (LB convention).
+
+function apiPath(p) {
+  if (p.startsWith('/api/') || p === '/health' || p.startsWith('/metrics')) {
+    return p;
+  }
+  return '/api' + p;
+}
 
 export async function api(path, opts = {}) {
   const headers = {
@@ -7,7 +19,7 @@ export async function api(path, opts = {}) {
   if (!(opts.body instanceof FormData) && !opts.rawBody) {
     headers['Content-Type'] = 'application/json';
   }
-  const res = await fetch(path, {
+  const res = await fetch(apiPath(path), {
     method: opts.method ?? 'GET',
     headers,
     credentials: 'include',

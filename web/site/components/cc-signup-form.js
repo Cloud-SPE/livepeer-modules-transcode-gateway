@@ -35,7 +35,7 @@ class CcSignupForm extends LitElement {
     this.state = 'submitting';
     this.message = '';
     try {
-      await api('/api/waitlist', {
+      await api('/api/public/waitlist', {
         method: 'POST',
         body: {
           name: String(fd.get('name')),

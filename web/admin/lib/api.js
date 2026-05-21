@@ -1,4 +1,9 @@
 // Admin API wrapper. Adds X-Admin-Token from localStorage.
+//
+// All gateway API routes live under /api/*. Legacy unprefixed paths
+// (/admin/...) are auto-prefixed so existing call sites keep working
+// without a sweep through every component. /health stays at the root
+// (LB convention).
 
 const TOKEN_KEY = 'lvp_video_admin_token';
 
@@ -10,13 +15,20 @@ export function setToken(tok) {
   else localStorage.removeItem(TOKEN_KEY);
 }
 
+function apiPath(p) {
+  if (p.startsWith('/api/') || p === '/health' || p.startsWith('/metrics')) {
+    return p;
+  }
+  return '/api' + p;
+}
+
 export async function api(path, opts = {}) {
   const headers = {
     'Content-Type': 'application/json',
     'X-Admin-Token': getToken(),
     ...(opts.headers ?? {}),
   };
-  const res = await fetch(path, {
+  const res = await fetch(apiPath(path), {
     method: opts.method ?? 'GET',
     headers,
     body: opts.body ? JSON.stringify(opts.body) : undefined,

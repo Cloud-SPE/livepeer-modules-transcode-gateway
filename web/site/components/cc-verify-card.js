@@ -29,7 +29,7 @@ class CcVerifyCard extends LitElement {
       return;
     }
     try {
-      const data = await api(`/api/verify?token=${encodeURIComponent(token)}`);
+      const data = await api(`/api/public/verify?token=${encodeURIComponent(token)}`);
       this.state = 'ok';
       this.message = data?.message ?? 'Email verified.';
     } catch (err) {
