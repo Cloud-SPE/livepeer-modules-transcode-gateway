@@ -16,7 +16,7 @@ design decision. Discussions promote into docs or they evaporate.
 ## 2. Boring tech, agent-legible
 
 We pick boring, well-documented, small-surface-area dependencies
-(Postgres, chi, huma, pgx, sqlc, Lit, esm.sh, RustFS) because agents
+(Postgres, chi, huma, pgx, sqlc, Lit, esm.sh, MinIO) because agents
 reason better about them and the runtime model is predictable.
 
 Reaching for an exotic dependency is a signal to write a plan and

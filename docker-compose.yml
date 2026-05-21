@@ -2,8 +2,9 @@
 #
 # Default `docker compose up` brings up:
 #   - db                 (postgres:16-alpine)
-#   - rustfs             (S3-compatible object store for VOD ingest)
-#   - rustfs-bootstrap   (one-shot: waits for rustfs, creates bucket + access key)
+#   - minio              (S3-compatible object store for VOD + live HLS)
+#   - minio-bootstrap    (one-shot: waits for minio, creates bucket + access key)
+#   - minio-cors         (one-shot: applies CORS policy for browser-direct PUTs)
 #   - gateway            (build from ./gateway/Dockerfile)
 #
 # The two Livepeer daemons live behind the `livepeer` profile. The
@@ -37,38 +38,38 @@ services:
     ports:
       - "${POSTGRES_HOST_PORT:-5432}:5432"
 
-  rustfs:
-    image: rustfs/rustfs:${RUSTFS_IMAGE_TAG:-latest}
-    container_name: video-gateway-rustfs
+  minio:
+    image: minio/minio:${MINIO_IMAGE_TAG:-latest}
+    container_name: video-gateway-minio
     environment:
-      RUSTFS_ROOT_USER: ${RUSTFS_ROOT_USER:-rustfs_root}
-      RUSTFS_ROOT_PASSWORD: ${RUSTFS_ROOT_PASSWORD:-rustfs-dev-password}
-      RUSTFS_ADDRESS: ":9000"
-      RUSTFS_CONSOLE_ADDRESS: ":9001"
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio_root}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minio-dev-password}
+      # MinIO sets CORS server-wide via env (no PutBucketCors API);
+      # this is wide-open in dev to match the SPAs at :3000/:3001/:3002
+      # and any browser-direct presigned PUTs. Override in prod.
+      MINIO_API_CORS_ALLOW_ORIGIN: ${MINIO_API_CORS_ALLOW_ORIGIN:-*}
     volumes:
-      - video-gateway-rustfs-data:/data
+      - video-gateway-minio-data:/data
     ports:
-      - "${RUSTFS_HOST_PORT:-9000}:9000"
-      - "${RUSTFS_CONSOLE_PORT:-9001}:9001"
+      - "${MINIO_HOST_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
     healthcheck:
-      # RustFS doesn't expose /minio/health/ready; any HTTP response
-      # (including S3's 403-on-unauth) proves the listener is up.
-      test: ["CMD-SHELL", "wget -q --spider --server-response http://localhost:9000/ 2>&1 | grep -E 'HTTP/' >/dev/null"]
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9000/minio/health/live >/dev/null"]
       interval: 5s
       timeout: 5s
       retries: 10
     restart: unless-stopped
-    command: ["rustfs", "server", "/data"]
+    command: ["server", "--address", ":9000", "--console-address", ":9001", "/data"]
 
-  rustfs-bootstrap:
+  minio-bootstrap:
     image: minio/mc:latest
-    container_name: video-gateway-rustfs-bootstrap
+    container_name: video-gateway-minio-bootstrap
     depends_on:
-      rustfs:
+      minio:
         condition: service_healthy
     environment:
-      RUSTFS_ROOT_USER: ${RUSTFS_ROOT_USER:-rustfs_root}
-      RUSTFS_ROOT_PASSWORD: ${RUSTFS_ROOT_PASSWORD:-rustfs-dev-password}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio_root}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minio-dev-password}
       S3_BUCKET: ${S3_BUCKET:-lvp-video-ingest}
       S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-video-gateway}
       S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-video-gateway-dev-secret}
@@ -76,53 +77,26 @@ services:
     command:
       - |
         set -e
-        mc alias set rustfs http://rustfs:9000 "$$RUSTFS_ROOT_USER" "$$RUSTFS_ROOT_PASSWORD"
-        mc mb --ignore-existing rustfs/$$S3_BUCKET
-        mc anonymous set download rustfs/$$S3_BUCKET || true
-        if ! mc admin user info rustfs "$$S3_ACCESS_KEY_ID" >/dev/null 2>&1; then
-          mc admin user add rustfs "$$S3_ACCESS_KEY_ID" "$$S3_SECRET_ACCESS_KEY"
+        mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD"
+        # Bucket + anonymous read for HLS playback.
+        mc mb --ignore-existing local/$$S3_BUCKET
+        mc anonymous set download local/$$S3_BUCKET || true
+        # Gateway IAM user — used for static-credential operations (VOD
+        # ABR uploads) AND for calling STS AssumeRole (per-session live
+        # uploads). The 'readwrite' built-in policy gives s3:* on /*,
+        # which covers both. MinIO allows STS AssumeRole for any
+        # authenticated user; the inline policy passed at AssumeRole
+        # time narrows the result to a session's prefix.
+        if ! mc admin user info local "$$S3_ACCESS_KEY_ID" >/dev/null 2>&1; then
+          mc admin user add local "$$S3_ACCESS_KEY_ID" "$$S3_SECRET_ACCESS_KEY"
         fi
-        mc admin policy attach rustfs readwrite --user "$$S3_ACCESS_KEY_ID" || true
-        echo "rustfs-bootstrap: bucket $$S3_BUCKET ready, access key $$S3_ACCESS_KEY_ID provisioned"
+        mc admin policy attach local readwrite --user "$$S3_ACCESS_KEY_ID" || true
+        echo "minio-bootstrap: bucket $$S3_BUCKET ready, access key $$S3_ACCESS_KEY_ID provisioned"
     restart: "no"
 
-  rustfs-cors:
-    # CORS lives on the standard S3 API surface (not in mc), so we apply
-    # it with the AWS CLI. Browsers PUT directly to RustFS from the
-    # portal/admin SPAs, so the allowed origins mirror the dev ports.
-    image: amazon/aws-cli:latest
-    container_name: video-gateway-rustfs-cors
-    depends_on:
-      rustfs-bootstrap:
-        condition: service_completed_successfully
-    environment:
-      AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-video-gateway}
-      AWS_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-video-gateway-dev-secret}
-      AWS_DEFAULT_REGION: ${S3_REGION:-us-east-1}
-      S3_BUCKET: ${S3_BUCKET:-lvp-video-ingest}
-      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:3001,http://localhost:3002}
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - |
-        set -e
-        ORIGINS=$$(echo "$$CORS_ALLOWED_ORIGINS" | awk -F, '{for(i=1;i<=NF;i++) printf "\"%s\"%s", $$i, (i<NF?",":"")}')
-        cat > /tmp/cors.json <<JSON
-        {
-          "CORSRules": [
-            {
-              "AllowedOrigins": [$$ORIGINS],
-              "AllowedMethods": ["PUT", "GET", "HEAD"],
-              "AllowedHeaders": ["*"],
-              "ExposeHeaders": ["ETag", "x-amz-request-id"],
-              "MaxAgeSeconds": 3000
-            }
-          ]
-        }
-        JSON
-        aws --endpoint-url http://rustfs:9000 s3api put-bucket-cors \
-          --bucket "$$S3_BUCKET" --cors-configuration file:///tmp/cors.json
-        echo "rustfs-cors: CORS applied to $$S3_BUCKET for origins: $$CORS_ALLOWED_ORIGINS"
-    restart: "no"
+  # NOTE: MinIO sets CORS via MINIO_API_CORS_ALLOW_ORIGIN env (server-side,
+  # not via a PutBucketCors API call). See the minio service above. No
+  # separate bootstrap step required.
 
   gateway:
     build:
@@ -133,9 +107,7 @@ services:
     depends_on:
       db:
         condition: service_healthy
-      rustfs-bootstrap:
-        condition: service_completed_successfully
-      rustfs-cors:
+      minio-bootstrap:
         condition: service_completed_successfully
     environment:
       # ── server ──
@@ -165,7 +137,7 @@ services:
       # ── object store ──
       S3_REGION: ${S3_REGION:-us-east-1}
       S3_BUCKET: ${S3_BUCKET:-lvp-video-ingest}
-      S3_ENDPOINT: ${S3_ENDPOINT:-http://rustfs:9000}
+      S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
       S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-http://localhost:9000}
       S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-video-gateway}
       S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-video-gateway-dev-secret}
@@ -267,6 +239,6 @@ services:
 
 volumes:
   video-gateway-pgdata:
-  video-gateway-rustfs-data:
+  video-gateway-minio-data:
   video-gateway-registry-cache:
   livepeer-run:

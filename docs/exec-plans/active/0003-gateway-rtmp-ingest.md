@@ -44,7 +44,7 @@ OBS  ──→  gateway:1935  ──→  orch's private RTMP endpoint (rtmp://ho
         S3 credential
         (scoped to live-out/<api_key>/<live_id>/)
                 ↓
-        orch live-runner writes HLS  ──→  RustFS / S3  ──→  CDN  ──→  viewers
+        orch live-runner writes HLS  ──→  S3 (MinIO)  ──→  CDN  ──→  viewers
 ```
 
 ## Capability + offering shape (upstream-finalized)
@@ -95,7 +95,6 @@ either, both, or neither per orch.
 
 ```
 LIVE_RTMP_PORT=1935                       # 0 disables the RTMP listener entirely
-LIVE_INGEST_MODE_DEFAULT=broker_ingest    # or gateway_ingest
 LIVE_PLAYBACK_BASE_URL=                   # optional CDN base; falls back to bucket URL
 LIVE_S3_CREDENTIAL_TTL_HOURS=4
 LIVE_CAPABILITY=video:transcode.live
@@ -122,11 +121,18 @@ minter live, broker client + retry-once rotation handling all in place.
 
 - Surface the runner's richer status fields (`ConnectedPublisher`,
   `LastPacketAt`, `PutFailureCount`) in the admin live-streams view.
-- Real STS-style credentials for the runner once RustFS exposes assume-role
-  (today: shared bucket credential with key_prefix scoping; documented
-  trust boundary).
 - CDN integration: when ready, a CDN sits in front of our object store
   with no gateway-side code change.
+
+## Storage backend — MinIO + STS (shipped 2026-05-21)
+
+- Backend is MinIO (was RustFS until 2026-05-21).
+- Per-session credentials are minted via STS AssumeRole with an inline
+  policy scoped to `live-out/<api_key>/<live_id>/*` (s3:PutObject /
+  s3:DeleteObject / s3:AbortMultipartUpload only). MinIO enforces the
+  scope server-side; a compromised runner can only write within its
+  session's prefix.
+- The gateway's long-lived bucket credentials never leave this process.
 
 ## Cross-references
 

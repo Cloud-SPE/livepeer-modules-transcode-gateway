@@ -41,7 +41,7 @@ func RegisterHealth(api huma.API, deps Deps) {
 		dbState.LatencyMs = time.Since(t).Milliseconds()
 		out.Body.Checks["db"] = dbState
 
-		// RustFS (S3)
+		// S3 (MinIO in dev, any S3-compatible store)
 		s3State := HealthCheck{Status: "skipped"}
 		t = time.Now()
 		if deps.S3 != nil {
@@ -52,7 +52,7 @@ func RegisterHealth(api huma.API, deps Deps) {
 			}
 		}
 		s3State.LatencyMs = time.Since(t).Milliseconds()
-		out.Body.Checks["rustfs"] = s3State
+		out.Body.Checks["s3"] = s3State
 
 		// payer
 		pState := HealthCheck{Status: "skipped"}

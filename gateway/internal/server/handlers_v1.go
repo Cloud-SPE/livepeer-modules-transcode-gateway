@@ -108,7 +108,7 @@ func registerV1Upload(api huma.API, deps Deps) {
 		OperationID: "v1-abr-upload-url",
 		Method:      http.MethodPost,
 		Path:        "/v1/abr/upload-url",
-		Summary:     "Get a presigned RustFS PUT URL for VOD ingest",
+		Summary:     "Get a presigned S3 PUT URL for VOD ingest",
 		Tags:        []string{"v1"},
 	}, func(ctx context.Context, in *UploadURLIn) (*UploadURLOut, error) {
 		if deps.S3 == nil {
@@ -298,7 +298,7 @@ func registerV1ABR(api huma.API, deps Deps) {
 					return nil, fmt.Errorf("unknown preset %q (known: %v)", presetName, abr.Names())
 				}
 				if deps.S3 == nil {
-					return nil, fmt.Errorf("output_urls require S3 — RustFS not configured")
+					return nil, fmt.Errorf("output_urls require S3 — not configured")
 				}
 				outputs, masterURL, err := mintABROutputs(ctx, deps, ak.ID.String(), workID.String(), preset)
 				if err != nil {
@@ -498,7 +498,7 @@ func registerV1ABR(api huma.API, deps Deps) {
 		OperationID: "v1-abr-delete-objects",
 		Method:      http.MethodDelete,
 		Path:        "/v1/abr/objects",
-		Summary:     "Delete a VOD upload and its transcode outputs from RustFS",
+		Summary:     "Delete a VOD upload and its transcode outputs from S3",
 		Tags:        []string{"v1"},
 	}, func(ctx context.Context, in *struct {
 		Body struct {
@@ -686,6 +686,17 @@ func registerV1Live(api huma.API, deps Deps) {
 			}
 		}
 		_ = deps.Live.EndWithReason(ctx, live.ID, repo.LiveEnded, closeReason)
+		// Synchronously tear down the customer's RTMP socket + our
+		// upstream relay push. Without this, OBS would happily keep
+		// pushing bytes to a now-dead broker session until TCP
+		// keepalive notices (~30-60s later). Idempotent if no relay
+		// is currently active.
+		if deps.RTMPProbe != nil {
+			if closed := deps.RTMPProbe.CloseSession(live.ID.String()); closed {
+				deps.Log.Info("live: rtmp relay torn down",
+					"live_id", live.ID, "close_reason", closeReason)
+			}
+		}
 		// Per the runner team's call (E): no refund on customer DELETE
 		// of an accepted session; the reservation was already committed
 		// at session-open time. We just decrement the active gauge.
@@ -888,7 +899,7 @@ func openLiveGatewayIngest(ctx context.Context, deps Deps, ak *repo.APIKey, in *
 	if credTTL <= 0 {
 		credTTL = 4 * time.Hour
 	}
-	creds, err := deps.S3.MintLiveSessionCredentials(keyPrefix, credTTL)
+	creds, err := deps.S3.MintLiveSessionCredentials(ctx, keyPrefix, credTTL)
 	if err != nil {
 		_ = deps.Usage.Refund(ctx, res.ID, 500, "s3_creds_failed")
 		_ = deps.Live.Fail(ctx, live.ID, "s3_creds_failed")

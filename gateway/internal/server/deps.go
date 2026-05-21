@@ -41,13 +41,19 @@ type Deps struct {
 }
 
 // RTMPProbe is the interface /health uses to query the RTMP server's
-// current state. Decoupled so the server package doesn't import the
-// rtmp package directly (avoids the circular-import risk if rtmp ever
-// needs anything from server).
+// current state AND the DELETE /v1/live handler uses to tear down the
+// active relay for a session. Decoupled so the server package doesn't
+// import the rtmp package directly (avoids the circular-import risk if
+// rtmp ever needs anything from server).
 type RTMPProbe interface {
 	// ActivePublishes returns the current count of authenticated
 	// publishes. Cheap; safe to call from a hot path.
 	ActivePublishes() int64
 	// Listening reports whether the listener socket is bound.
 	Listening() bool
+	// CloseSession force-tears-down any active relay for a given
+	// live_streams.id: closes the customer's RTMP TCP socket and our
+	// upstream relay push. Idempotent and safe to call even when no
+	// relay is active. Returns true when a relay was found + closed.
+	CloseSession(liveStreamID string) bool
 }

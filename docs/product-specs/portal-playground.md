@@ -50,7 +50,7 @@ When succeeded:
 
 Behavior:
 - Drop zone accepts a single video file (`accept="video/*"`).
-- On drop: `POST /v1/abr/upload-url` → PUT bytes to RustFS → on PUT
+- On drop: `POST /v1/abr/upload-url` → PUT bytes to S3 → on PUT
   200, `POST /v1/abr {input_url: object_url}` → poll
   `GET /v1/abr/:id` every 3s.
 - Rendition selector lets the user override the auto-quality default

@@ -37,7 +37,7 @@ type Config struct {
 
 	S3Region          string `env:"S3_REGION" envDefault:"us-east-1"`
 	S3Bucket          string `env:"S3_BUCKET" envDefault:"lvp-video-ingest"`
-	S3Endpoint        string `env:"S3_ENDPOINT" envDefault:"http://rustfs:9000"`
+	S3Endpoint        string `env:"S3_ENDPOINT" envDefault:"http://minio:9000"`
 	S3PublicEndpoint  string `env:"S3_PUBLIC_ENDPOINT" envDefault:"http://localhost:9000"`
 	S3AccessKeyID     string `env:"S3_ACCESS_KEY_ID"`
 	S3SecretAccessKey string `env:"S3_SECRET_ACCESS_KEY"`

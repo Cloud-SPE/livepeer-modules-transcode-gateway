@@ -136,8 +136,10 @@ type LiveOutputCredential struct {
 	KeyPrefix       string `json:"key_prefix"`
 	AccessKeyID     string `json:"access_key_id"`
 	SecretAccessKey string `json:"secret_access_key"`
-	SessionToken    string `json:"session_token"`
-	ExpiresAt       string `json:"expires_at"`
+	// SessionToken is always forwarded so temporary S3 credentials include
+	// the x-amz-security-token header during runner-side SigV4 signing.
+	SessionToken string `json:"session_token"`
+	ExpiresAt    string `json:"expires_at"`
 }
 
 type LiveIngestAccept struct {

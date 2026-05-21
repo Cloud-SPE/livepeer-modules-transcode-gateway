@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"net"
 	"strings"
 	"sync"
 	"time"
@@ -19,8 +20,10 @@ import (
 // one per accepted RTMP connection; we keep all auth + relay state here.
 type connHandler struct {
 	rtmp.DefaultHandler
-	deps  Deps
-	stats *serverStats
+	deps    Deps
+	stats   *serverStats
+	server  *Server  // back-reference for relay registry on auth/close
+	tcpConn net.Conn // the customer's underlying TCP socket, captured at accept
 
 	mu               sync.Mutex
 	logger           *slog.Logger // bound with conn-scoped attrs once known
@@ -29,13 +32,16 @@ type connHandler struct {
 	streamKeyHint    string // last 4 chars, log-safe
 	publishStartedAt time.Time
 	relay            *Relay
+	closed           bool // OnClose / shutdown idempotency
 }
 
-func newConnHandler(deps Deps, stats *serverStats) *connHandler {
+func newConnHandler(deps Deps, stats *serverStats, server *Server, tcpConn net.Conn) *connHandler {
 	return &connHandler{
-		deps:   deps,
-		stats:  stats,
-		logger: deps.Log,
+		deps:    deps,
+		stats:   stats,
+		server:  server,
+		tcpConn: tcpConn,
+		logger:  deps.Log,
 	}
 }
 
@@ -120,6 +126,10 @@ func (h *connHandler) OnPublish(_ *rtmp.StreamContext, _ uint32, cmd *rtmpmsg.Ne
 		return errors.New("upstream open failed")
 	}
 	h.relay = relay
+	// Register so DELETE /v1/live can synchronously tear us down.
+	if h.server != nil {
+		h.server.registerRelay(result.LiveStreamID, h)
+	}
 	return nil
 }
 
@@ -152,15 +162,45 @@ func (h *connHandler) OnVideo(timestamp uint32, payload io.Reader) error {
 // OnClose drops the connection — gracefully if the customer hung up,
 // or because we returned an error from OnPublish.
 func (h *connHandler) OnClose() {
+	h.teardown("customer_disconnect")
+}
+
+// shutdown is the explicit-teardown entry point used by the HTTP layer
+// (DELETE /v1/live → Server.CloseSession). It closes both the upstream
+// relay and the customer's TCP socket so the customer's encoder sees a
+// disconnection. Safe to call concurrently with OnClose (idempotent).
+func (h *connHandler) shutdown(reason string) {
+	h.teardown(reason)
+	// Force-close the customer's TCP socket so their encoder reports a
+	// disconnect immediately, instead of waiting for TCP keepalive.
+	// teardown() above only closes the upstream side; the listener-side
+	// socket is owned by yutopp/go-rtmp and we close it directly here.
+	h.mu.Lock()
+	tcp := h.tcpConn
+	h.mu.Unlock()
+	if tcp != nil {
+		_ = tcp.Close()
+	}
+}
+
+func (h *connHandler) teardown(reason string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if h.closed {
+		return
+	}
+	h.closed = true
 	if h.relay != nil {
 		_ = h.relay.Close()
 		h.relay = nil
 	}
+	if h.server != nil && h.auth != nil {
+		h.server.deregisterRelay(h.auth.LiveStreamID, h)
+	}
 	if h.authed {
 		h.stats.activePublishes.Add(-1)
 		h.logger.Info("rtmp: publish ended",
+			"reason", reason,
 			"duration_seconds", int(time.Since(h.publishStartedAt).Seconds()))
 	}
 }

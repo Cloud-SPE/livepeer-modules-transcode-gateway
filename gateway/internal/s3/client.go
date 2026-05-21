@@ -11,21 +11,25 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
+	awssts "github.com/aws/aws-sdk-go-v2/service/sts"
 )
 
 // Client wraps an aws-sdk-go-v2 S3 client configured for an
-// S3-compatible endpoint (RustFS in dev, anything S3 elsewhere).
+// S3-compatible endpoint. MinIO is the current backend; any STS-capable
+// S3-compatible store (MinIO, AWS S3, Cloudflare R2, etc.) works.
 type Client struct {
-	api             *awss3.Client
-	bucket          string
-	region          string
+	api              *awss3.Client
+	sts              *awssts.Client
+	bucket           string
+	region           string
 	internalEndpoint string
-	publicEndpoint  string
-	presignTTL      time.Duration
-	presigner       *awss3.PresignClient
-	// Stored explicitly so MintLiveSessionCredentials can vend them to
-	// the runner. In production this should be replaced by an STS
-	// AssumeRole flow that produces scoped temp credentials.
+	publicEndpoint   string
+	presignTTL       time.Duration
+	presigner        *awss3.PresignClient
+	// Root credentials used to call STS AssumeRole when minting
+	// per-session live-runner credentials. The STS response contains
+	// scoped temporary credentials that the runner uses for SigV4 — the
+	// gateway never vends these long-lived values to the runner.
 	accessKeyID     string
 	secretAccessKey string
 }
@@ -47,7 +51,7 @@ func New(ctx context.Context, region, endpoint, publicEndpoint, bucket, accessKe
 		Region:      region,
 		Credentials: creds,
 	}
-	// Server-to-S3 client uses the internal endpoint (e.g. http://rustfs:9000
+	// Server-to-S3 client uses the internal endpoint (e.g. http://minio:9000
 	// inside the compose network) for HeadBucket and any in-process S3 calls.
 	api := awss3.NewFromConfig(cfg, func(o *awss3.Options) {
 		o.BaseEndpoint = aws.String(endpoint)
@@ -65,12 +69,20 @@ func New(ctx context.Context, region, endpoint, publicEndpoint, bucket, accessKe
 		o.BaseEndpoint = aws.String(publicEndpoint)
 		o.UsePathStyle = true
 	})
+	// STS endpoint shares the S3 endpoint URL on MinIO (Action= query
+	// parameter routes the request). For real AWS this would be the
+	// regional STS endpoint; for the S3-compatible stores we ship with
+	// (MinIO) the internal S3 endpoint is correct.
+	stsAPI := awssts.NewFromConfig(cfg, func(o *awssts.Options) {
+		o.BaseEndpoint = aws.String(endpoint)
+	})
 	ttl := time.Duration(presignTTLSecs) * time.Second
 	if ttl <= 0 {
 		ttl = time.Hour
 	}
 	return &Client{
 		api:              api,
+		sts:              stsAPI,
 		bucket:           bucket,
 		region:           region,
 		internalEndpoint: endpoint,
@@ -83,16 +95,11 @@ func New(ctx context.Context, region, endpoint, publicEndpoint, bucket, accessKe
 }
 
 // LiveSessionCredentials is the credential bundle the gateway sends to
-// the orchestrator's live-runner via the broker. The runner uses these
-// to write HLS output directly to our object store, scoped by key_prefix.
-//
-// v1 caveat: RustFS doesn't expose AWS STS / AssumeRole today, so this
-// returns the gateway's static bucket credentials with a key_prefix that
-// the runner is expected to honor by convention. This is a known trust
-// boundary — the orchestrator is trusted not to write outside the prefix.
-// Future hardening: real STS-style temporary credentials when RustFS
-// supports it, OR a per-session sidecar gateway proxy that signs PUTs
-// against arbitrary keys.
+// the orchestrator's live-runner via the broker. Backed by STS
+// AssumeRole + an inline policy scoped to the session's key_prefix; the
+// runner gets only PutObject/DeleteObject under <bucket>/<key_prefix>/*
+// regardless of what it tries to address. Long-lived gateway credentials
+// never leave this process.
 type LiveSessionCredentials struct {
 	Endpoint        string    `json:"endpoint"`
 	Region          string    `json:"region"`
@@ -100,48 +107,111 @@ type LiveSessionCredentials struct {
 	KeyPrefix       string    `json:"key_prefix"`
 	AccessKeyID     string    `json:"access_key_id"`
 	SecretAccessKey string    `json:"secret_access_key"`
-	SessionToken    string    `json:"session_token,omitempty"`
+	SessionToken    string    `json:"session_token"`
 	ExpiresAt       time.Time `json:"expires_at"`
 }
 
-// MintLiveSessionCredentials returns a credential bundle scoped to the
-// given key prefix. The runner is expected to PutObject only under
-// `<bucket>/<keyPrefix>/...`. The TTL is informational in v1 (static
-// credentials don't actually expire); once STS lands it becomes real.
+// MintLiveSessionCredentials calls STS AssumeRole with an inline policy
+// scoped to the given key_prefix. The returned credentials are real
+// short-lived STS tokens; the backend (MinIO) enforces the scope, so
+// a compromised runner can only write under that one session's prefix.
 //
 // keyPrefix should NOT have a trailing slash; the runner appends file
-// names directly to it.
-func (c *Client) MintLiveSessionCredentials(keyPrefix string, ttl time.Duration) (*LiveSessionCredentials, error) {
+// names directly to it. MinIO requires DurationSeconds between 900 and
+// 604800; we clamp to that range.
+func (c *Client) MintLiveSessionCredentials(ctx context.Context, keyPrefix string, ttl time.Duration) (*LiveSessionCredentials, error) {
 	if c == nil {
 		return nil, errors.New("s3 not configured")
 	}
 	if keyPrefix == "" {
 		return nil, errors.New("s3: keyPrefix required")
 	}
-	if ttl <= 0 {
-		ttl = 4 * time.Hour
+	if ttl < 15*time.Minute {
+		ttl = 15 * time.Minute
 	}
+	if ttl > 7*24*time.Hour {
+		ttl = 7 * 24 * time.Hour
+	}
+	keyPrefix = strings.TrimRight(keyPrefix, "/")
+	// Inline policy: the runner can PUT, DELETE, and complete multipart
+	// uploads under <bucket>/<keyPrefix>/* — and nothing else. MinIO
+	// intersects this with the calling user's policy, so any narrowing
+	// here is enforced server-side.
+	inlinePolicy := fmt.Sprintf(`{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload"],
+      "Resource": ["arn:aws:s3:::%s/%s/*"]
+    }
+  ]
+}`, c.bucket, keyPrefix)
+
+	stsCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	// MinIO's AssumeRole ignores RoleArn but the AWS SDK requires it;
+	// RoleSessionName has a 64-char limit and must match [\w+=,.@-]{2,64}.
+	sessionName := safeSessionName("gw-live-" + keyPrefix)
+	out, err := c.sts.AssumeRole(stsCtx, &awssts.AssumeRoleInput{
+		RoleArn:         aws.String("arn:aws:iam::000:role/gateway-live-ingest"),
+		RoleSessionName: aws.String(sessionName),
+		DurationSeconds: aws.Int32(int32(ttl.Seconds())),
+		Policy:          aws.String(inlinePolicy),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("s3: STS AssumeRole: %w", err)
+	}
+	if out.Credentials == nil ||
+		out.Credentials.AccessKeyId == nil ||
+		out.Credentials.SecretAccessKey == nil ||
+		out.Credentials.SessionToken == nil {
+		return nil, errors.New("s3: STS AssumeRole returned incomplete credentials")
+	}
+
 	// The runner reaches our S3 from outside Docker, so it needs the
-	// PUBLIC endpoint, not the internal `http://rustfs:9000`.
+	// PUBLIC endpoint, not the internal `http://minio:9000`.
 	endpoint := c.publicEndpoint
 	if endpoint == "" {
 		endpoint = c.internalEndpoint
+	}
+	expiresAt := time.Now().Add(ttl)
+	if out.Credentials.Expiration != nil {
+		expiresAt = *out.Credentials.Expiration
 	}
 	return &LiveSessionCredentials{
 		Endpoint:        endpoint,
 		Region:          c.region,
 		Bucket:          c.bucket,
-		KeyPrefix:       strings.TrimRight(keyPrefix, "/"),
-		AccessKeyID:     c.accessKeyID,
-		SecretAccessKey: c.secretAccessKey,
-		// RustFS doesn't expose STS / AssumeRole, so there's no real
-		// session token to vend. The broker rejects empty session_token,
-		// so we send a sentinel that's syntactically valid but
-		// semantically meaningless. The runner uses the access_key_id
-		// + secret_access_key (static) and ignores this field.
-		SessionToken: "static-credentials-no-sts",
-		ExpiresAt:    time.Now().Add(ttl),
+		KeyPrefix:       keyPrefix,
+		AccessKeyID:     *out.Credentials.AccessKeyId,
+		SecretAccessKey: *out.Credentials.SecretAccessKey,
+		SessionToken:    *out.Credentials.SessionToken,
+		ExpiresAt:       expiresAt,
 	}, nil
+}
+
+// safeSessionName trims/mangles s to fit AWS STS RoleSessionName rules:
+// 2-64 chars, [\w+=,.@-]. UUID-shaped prefixes contain dashes which are
+// allowed; we replace forbidden characters with '-' and truncate.
+func safeSessionName(s string) string {
+	const maxLen = 64
+	out := make([]byte, 0, len(s))
+	for i := 0; i < len(s) && i < maxLen; i++ {
+		c := s[i]
+		switch {
+		case (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+			(c >= '0' && c <= '9') ||
+			c == '+' || c == '=' || c == ',' || c == '.' || c == '@' || c == '-' || c == '_':
+			out = append(out, c)
+		default:
+			out = append(out, '-')
+		}
+	}
+	if len(out) < 2 {
+		out = append(out, []byte("--")...)
+	}
+	return string(out)
 }
 
 // PublicHLSMasterURL returns the customer-facing playback URL for a

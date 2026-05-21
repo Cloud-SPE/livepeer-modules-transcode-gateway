@@ -13,10 +13,11 @@ in spirit; the Go shape is different.
    to connect kills the process — there is no DB-less mode.
 3. **Run migrations.** `golang-migrate` against
    `gateway/migrations/`, recorded in `schema_migrations`. Idempotent.
-4. **Open RustFS client.** `aws-sdk-go-v2` configured with
-   `S3_ENDPOINT` + path-style addressing. A startup head-bucket call
-   confirms reachability; failure logs a warning but does not exit
-   (the SaaS surface still works without VOD ingest).
+4. **Open S3 client.** `aws-sdk-go-v2` configured with `S3_ENDPOINT`
+   + path-style addressing (MinIO in dev, any S3-compatible store
+   elsewhere). A startup head-bucket call confirms reachability;
+   failure logs a warning but does not exit (the SaaS surface still
+   works without VOD ingest).
 5. **Wire gRPC clients.** Best-effort dial to
    `LIVEPEER_RESOLVER_SOCKET` and `LIVEPEER_PAYER_DAEMON_SOCKET`.
    Missing sockets log a warning; `/v1/*` returns 500/503 at request

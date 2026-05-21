@@ -69,7 +69,7 @@ func run() error {
 	// Email
 	mailer := email.New(cfg.ResendAPIKey, cfg.FromEmail, log)
 
-	// S3 / RustFS
+	// S3 (MinIO in dev, any S3-compatible store)
 	s3c, err := s3.New(ctx, cfg.S3Region, cfg.S3Endpoint, cfg.S3PublicEndpoint, cfg.S3Bucket,
 		cfg.S3AccessKeyID, cfg.S3SecretAccessKey, cfg.S3PresignTTLSecs)
 	if err != nil {

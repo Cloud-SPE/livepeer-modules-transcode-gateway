@@ -61,6 +61,11 @@ type Server struct {
 	wg       sync.WaitGroup
 	closing  atomic.Bool
 	stats    serverStats
+	// activeRelays maps live_stream_id → connHandler so the HTTP
+	// DELETE /v1/live path can synchronously tear down the customer
+	// RTMP socket + the upstream relay push, instead of waiting for
+	// TCP timeouts or for the customer's encoder to notice.
+	activeRelays sync.Map // string → *connHandler
 }
 
 type serverStats struct {
@@ -106,8 +111,9 @@ func (s *Server) Run(ctx context.Context) error {
 	srv := rtmp.NewServer(&rtmp.ServerConfig{
 		OnConnect: func(conn net.Conn) (io.ReadWriteCloser, *rtmp.ConnConfig) {
 			s.stats.totalAccepted.Add(1)
+			h := newConnHandler(s.deps, &s.stats, s, conn)
 			return conn, &rtmp.ConnConfig{
-				Handler: newConnHandler(s.deps, &s.stats),
+				Handler: h,
 				ControlState: rtmp.StreamControlStateConfig{
 					DefaultBandwidthWindowSize: 6 * 1024 * 1024 / 8,
 				},
@@ -158,4 +164,45 @@ func (s *Server) ActivePublishes() int64 {
 // when the server is disabled (LIVE_RTMP_PORT=0) or hasn't started yet.
 func (s *Server) Listening() bool {
 	return s.listener != nil && !s.closing.Load()
+}
+
+// CloseSession synchronously tears down the active RTMP relay for the
+// given live_stream_id, if any. Called from the HTTP DELETE /v1/live
+// handler so "Stop stream" cleanly closes both the customer's RTMP
+// socket and our outgoing relay push to the orchestrator.
+//
+// Returns true if a relay was found and torn down; false when the
+// session has no active publish (already disconnected, or never
+// connected). Either case is fine — the broker side has already been
+// notified at this point.
+func (s *Server) CloseSession(liveStreamID string) bool {
+	v, ok := s.activeRelays.LoadAndDelete(liveStreamID)
+	if !ok {
+		return false
+	}
+	h, ok := v.(*connHandler)
+	if !ok || h == nil {
+		return false
+	}
+	h.shutdown("session_ended")
+	return true
+}
+
+func (s *Server) registerRelay(liveStreamID string, h *connHandler) {
+	if liveStreamID == "" || h == nil {
+		return
+	}
+	s.activeRelays.Store(liveStreamID, h)
+}
+
+func (s *Server) deregisterRelay(liveStreamID string, h *connHandler) {
+	if liveStreamID == "" {
+		return
+	}
+	// Only remove if the entry is still THIS handler — protects against
+	// a race where a new session for the same liveStreamID (shouldn't
+	// happen but cheap to guard) overwrote our registration.
+	if cur, ok := s.activeRelays.Load(liveStreamID); ok && cur == h {
+		s.activeRelays.Delete(liveStreamID)
+	}
 }

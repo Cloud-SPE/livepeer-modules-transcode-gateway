@@ -11,7 +11,7 @@ import { api } from '/lib/api.js';
 //
 // VOD uploads persist in localStorage so a failed dispatch (e.g. the
 // network has no abr-ladder broker right now) doesn't lose the file
-// the user already pushed to RustFS. Each entry can be re-submitted
+// the user already pushed to S3. Each entry can be re-submitted
 // when the capability comes back online.
 
 const KEY_STORAGE      = 'lvp_video_api_key';
@@ -33,6 +33,7 @@ class CcPlayground extends LitElement {
     // live
     liveSession:      { state: true },
     liveBusy:         { state: true },
+    livePlaying:      { state: true },
 
     // transcode (VOD ABR)
     uploads:          { state: true },
@@ -51,6 +52,7 @@ class CcPlayground extends LitElement {
     this.liveOnline     = false;
     this.liveSession    = null;
     this.liveBusy       = false;
+    this.livePlaying    = false;
     this.uploads        = readUploads();
     this.activeUploadID = '';
     this.uploading      = false;
@@ -149,13 +151,24 @@ Server: ${s.ingest.rtmp_url}
 Stream Key: ${s.ingest.stream_key}</pre>
       </details>
       <p><strong>Playback:</strong> <code>${s.playback.hls_url}</code></p>
-      <video controls autoplay muted></video>
-      <button class="ghost danger" @click=${this.#stopLive}>Stop stream</button>
+      <video controls muted></video>
+      <div style="display:flex; gap:8px; margin-top:8px">
+        <button class="ghost" @click=${this.#playLive} ?disabled=${this.livePlaying}>
+          ${this.livePlaying ? 'Loaded — use video controls' : '▶ Load preview'}
+        </button>
+        <button class="ghost danger" @click=${this.#stopLive}>Stop stream</button>
+      </div>
+      <p class="msg" style="margin-top:8px">
+        Click <strong>Load preview</strong> once your encoder is actually
+        publishing — the playlist isn't written until media starts flowing.
+      </p>
     `;
   }
 
   async #createLive() {
     this.liveBusy = true; this.error = '';
+    this.livePlaying = false;
+    this.#tearDownHls();
     try {
       const data = await api('/v1/live', {
         method: 'POST',
@@ -163,14 +176,22 @@ Stream Key: ${s.ingest.stream_key}</pre>
         body: { name: 'playground' },
       });
       this.liveSession = data.session;
-      await this.updateComplete;
-      this.#attachHls(data.session.playback.hls_url);
+      // Don't auto-attach hls.js — the master.m3u8 doesn't exist until
+      // the customer's encoder has been pushing for a few seconds AND
+      // the runner has uploaded the first segments. Wait for the user
+      // to click "Load preview" so we don't spam 404 retries.
     } catch (err) {
       this.error = err.message;
     } finally {
       this.liveBusy = false;
     }
   }
+
+  #playLive = () => {
+    if (!this.liveSession?.playback?.hls_url) return;
+    this.#attachHls(this.liveSession.playback.hls_url);
+    this.livePlaying = true;
+  };
 
   async #stopLive() {
     if (!this.liveSession) return;
@@ -184,6 +205,7 @@ Stream Key: ${s.ingest.stream_key}</pre>
     } finally {
       this.#tearDownHls();
       this.liveSession = null;
+      this.livePlaying = false;
     }
   }
 
@@ -193,7 +215,7 @@ Stream Key: ${s.ingest.stream_key}</pre>
     return html`
       ${this.abrOnline
         ? html`
-          <p class="msg">Drop a video file. The portal presigns a RustFS PUT,
+          <p class="msg">Drop a video file. The portal presigns a S3 PUT,
             uploads bytes directly, then submits <code>/v1/abr</code> for an
             ABR ladder transcode.</p>
           <div class="drop-zone"
@@ -214,7 +236,7 @@ Stream Key: ${s.ingest.stream_key}</pre>
         ? ''
         : html`
           <h3 style="margin-top:24px">Your uploads</h3>
-          <p class="msg">Stored in this browser. RustFS keeps the source bytes;
+          <p class="msg">Stored in this browser. S3 keeps the source bytes;
             jobs can be re-submitted if the capability was offline.</p>
           <table>
             <thead><tr>
@@ -414,7 +436,7 @@ Stream Key: ${s.ingest.stream_key}</pre>
     }
     // Best-effort GC the bucket objects before clearing local state. We
     // do this BEFORE local removal so a failure leaves the entry visible
-    // (and retry-able) instead of orphaning bytes in RustFS.
+    // (and retry-able) instead of orphaning bytes in S3.
     if (u.object_url || u.job?.id) {
       try {
         await api('/v1/abr/objects', {
