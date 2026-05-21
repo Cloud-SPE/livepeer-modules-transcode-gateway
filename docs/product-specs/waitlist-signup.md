@@ -7,13 +7,13 @@ gated path to an API key.
 
 | Method | Path | Auth | Behavior |
 |---|---|---|---|
-| POST | `/api/waitlist` | none | Idempotent insert into `waitlist`; returns `{ok: true}` whether new or duplicate (no enumeration). Sends a verification email. |
-| GET | `/api/verify?token=…` | token | Sets `email_verified_at`; clears `verification_token_hash`. Returns `{ok: true, message: …}`. |
+| POST | `/api/public/waitlist` | none | Idempotent insert into `waitlist`; returns `{ok: true}` whether new or duplicate (no enumeration). Sends a verification email. |
+| GET | `/api/public/verify?token=…` | token | Sets `email_verified_at`; clears `verification_token_hash`. Returns `{ok: true, message: …}`. |
 
 ## Request bodies
 
 ```json
-POST /api/waitlist
+POST /api/public/waitlist
 { "name": "Alice", "email": "alice@example.com" }
 ```
 
@@ -21,7 +21,7 @@ POST /api/waitlist
 
 ## Rate limits
 
-- `/api/waitlist`: 5 / hour per `ip_hash` (peppered SHA-256). Excess
+- `/api/public/waitlist`: 5 / hour per `ip_hash` (peppered SHA-256). Excess
   returns 429.
 
 ## Email shape
@@ -41,10 +41,10 @@ and a `/verify.html` landing page (`<cc-verify-card>`). Branding:
 ## State transitions
 
 ```
-(no row) ──POST /api/waitlist──► pending, email_verified_at=NULL
-pending ──GET /api/verify?token=…──► pending, email_verified_at=now()
-pending ──POST /admin/waitlist/:id/approve──► approved + api_keys row + key emailed
-pending ──POST /admin/waitlist/:id/reject──► rejected
+(no row) ──POST /api/public/waitlist──► pending, email_verified_at=NULL
+pending ──GET /api/public/verify?token=…──► pending, email_verified_at=now()
+pending ──POST /api/admin/waitlist/:id/approve──► approved + api_keys row + key emailed
+pending ──POST /api/admin/waitlist/:id/reject──► rejected
 ```
 
 ## Acceptance

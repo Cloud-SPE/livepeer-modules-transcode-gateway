@@ -443,7 +443,8 @@ which starts each SPA on its own port and proxies `/api/*` to `:4000`.
 - The Livepeer wire spec itself — owned by `livepeer-network-protocol`
   in the source monorepo.
 - The on-chain service registry contracts — operated separately.
-- The `capability-broker` + `abr-runner` + `rtmp-ingress-hls-egress`
-  binaries — owned by `livepeer-network-modules`.
-- Gateway-side playback proxy — v2 concern; v1 returns broker HLS URLs.
+- The `capability-broker` + `abr-runner` + live-runner binaries —
+  owned by `livepeer-network-modules`.
+- Gateway-side playback proxy — v2 concern; v1 returns HLS URLs that
+  point at our MinIO (or a CDN fronting it).
 - Multi-region deployment topology.

@@ -2,13 +2,15 @@
 #
 # Default `docker compose up` brings up:
 #   - db                 (postgres:16-alpine)
-#   - minio              (S3-compatible object store for VOD + live HLS)
+#   - minio              (S3-compatible object store for VOD + live HLS,
+#                          CORS via MINIO_API_CORS_ALLOW_ORIGIN env)
 #   - minio-bootstrap    (one-shot: waits for minio, creates bucket + access key)
-#   - minio-cors         (one-shot: applies CORS policy for browser-direct PUTs)
-#   - gateway            (build from ./gateway/Dockerfile)
+#   - gateway            (build from ./gateway/Dockerfile; serves API,
+#                          embedded SPAs at /, /portal/, /admin/, /health,
+#                          /metrics on one port, plus RTMP on :1935)
 #
 # The two Livepeer daemons live behind the `livepeer` profile. The
-# gateway boots fine without them (`/v1/*` returns 503 until they're
+# gateway boots fine without them (`/api/v1/*` returns 503 until they're
 # reachable). Bring them up with:
 #   docker compose --profile livepeer up -d
 #
@@ -16,8 +18,10 @@
 # are external to this repository. The gateway expects on-chain
 # capability providers by default.
 #
-# The three Lit SPAs run independently via `node dev-server.js` in
-# each web/ subdir; they're not in this stack.
+# The three Lit SPAs are embedded into the gateway binary via
+# //go:embed (production). Devs who want hot-reload also run
+# `make web` which starts a per-SPA dev server outside this stack at
+# :3000/:3001/:3002, proxying /api/* to the gateway at :4000.
 
 services:
   db:
@@ -170,7 +174,7 @@ services:
       LIVE_PLAYBACK_BASE_URL: ${LIVE_PLAYBACK_BASE_URL:-}
       LIVE_S3_CREDENTIAL_TTL_HOURS: ${LIVE_S3_CREDENTIAL_TTL_HOURS:-4}
 
-      # ── /v1/* rate limit ──
+      # ── /api/v1/* rate limit ──
       V1_RATE_LIMIT_PER_MINUTE: ${V1_RATE_LIMIT_PER_MINUTE:-60}
       V1_RATE_LIMIT_BURST: ${V1_RATE_LIMIT_BURST:-30}
     volumes:

@@ -71,9 +71,12 @@ either, both, or neither per orch.
 4. ✅ Broker client for the new mode (`livepeer.OpenLiveSessionGatewayIngest`)
    + wire types `LiveOpenGatewayIngestRequest`/`Response`,
    `LiveOutputCredential`, `LiveIngestAccept`.
-5. ✅ `/v1/live` POST handler dispatches by `LIVE_INGEST_MODE_DEFAULT`. The
-   `openLiveGatewayIngest` helper resolves on capability `video:transcode.live`
-   with offering `gateway-ingest` (per `LIVE_GATEWAY_INGEST_OFFERING`).
+5. ✅ `/api/v1/live` POST handler (was originally `LIVE_INGEST_MODE_DEFAULT`-dispatched
+   when both modes coexisted; `live-session-remote-runner@v0` was removed
+   2026-05-21 and `LIVE_INGEST_MODE_DEFAULT` is gone — only gateway-ingest
+   survives). The `openLiveGatewayIngest` helper resolves on capability
+   `video:transcode.live` with offering `gateway-ingest` (per
+   `LIVE_GATEWAY_INGEST_OFFERING`).
 6. ✅ RTMP relay (`gateway/internal/rtmp/relay.go`) — yutopp/go-rtmp client
    for upstream push; forwards FLV tags from customer to upstream; closes
    cleanly on customer disconnect.
@@ -113,9 +116,11 @@ LIVE_TOPUP_FUND_SECS=60
 | Upstream daemon image `v1.3.2` published to Docker Hub | tztcloud |
 | Runner multi-rung ladder support (still passthrough + 1 rung in v1) | runner team |
 
-Our gateway is ready: build clean, both modes coexist behind the
-`LIVE_INGEST_MODE_DEFAULT` flag, RTMP listener bound on 1935, S3 credential
-minter live, broker client + retry-once rotation handling all in place.
+Our gateway is ready: build clean, gateway-ingest is the only live
+mode (the legacy `LIVE_INGEST_MODE_DEFAULT` flag and the
+`live-session-remote-runner@v0` code path were removed 2026-05-21),
+RTMP listener bound on 1935, S3 + STS credential minter live (MinIO),
+broker client + retry-once rotation handling all in place.
 
 ## Open follow-ups (small)
 

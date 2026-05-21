@@ -6,12 +6,12 @@ Operator-facing surface for managing the waitlist queue.
 
 | Method | Path | Behavior |
 |---|---|---|
-| GET | `/admin/waitlist?status=&limit=&cursor=` | Paginated list. `status` ∈ `pending`, `approved`, `rejected`, `all`. |
-| POST | `/admin/waitlist/:id/approve` | Approve → tx-insert `api_keys`, send key email. 409 if email not verified. |
-| POST | `/admin/waitlist/:id/reject` | Reject. |
-| POST | `/admin/waitlist/:id/resend-verification` | Re-mint verification token + re-send email. |
-| GET | `/admin/users` | Aggregate view: waitlist row + active api_keys + recent usage. |
-| GET | `/admin/usage` | Aggregate usage_reservations view (capability, outcome, latency). |
+| GET | `/api/admin/waitlist?status=&limit=&cursor=` | Paginated list. `status` ∈ `pending`, `approved`, `rejected`, `all`. |
+| POST | `/api/admin/waitlist/:id/approve` | Approve → tx-insert `api_keys`, send key email. 409 if email not verified. |
+| POST | `/api/admin/waitlist/:id/reject` | Reject. |
+| POST | `/api/admin/waitlist/:id/resend-verification` | Re-mint verification token + re-send email. |
+| GET | `/api/admin/users` | Aggregate view: waitlist row + active api_keys + recent usage. |
+| GET | `/api/admin/usage` | Aggregate usage_reservations view (capability, outcome, latency). |
 
 All routes require `X-Admin-Token`. Missing/invalid token → 401.
 Token unset on the server → 503 `admin_disabled`.

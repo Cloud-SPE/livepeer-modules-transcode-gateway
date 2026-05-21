@@ -7,7 +7,7 @@ out-of-date — never just "drift."
 
 | Doc | Surface | Status |
 |---|---|---|
-| [`waitlist-signup.md`](./waitlist-signup.md) | `/api/waitlist`, `/api/verify`, the marketing site. | live |
-| [`transcode-surface.md`](./transcode-surface.md) | `/v1/abr`, `/v1/abr/upload-url`, `/v1/live`, `/v1/capabilities`. | live |
+| [`waitlist-signup.md`](./waitlist-signup.md) | `/api/public/waitlist`, `/api/public/verify`, the marketing site. | live |
+| [`transcode-surface.md`](./transcode-surface.md) | `/api/v1/abr`, `/api/v1/abr/upload-url`, `/api/v1/live`, `/api/v1/capabilities`. | live |
 | [`portal-playground.md`](./portal-playground.md) | `web/portal` Playground component (Live + Transcode tabs). | live |
-| [`admin-waitlist.md`](./admin-waitlist.md) | `/admin/waitlist*` operator surface. | live |
+| [`admin-waitlist.md`](./admin-waitlist.md) | `/api/admin/waitlist*` operator surface. | live |
