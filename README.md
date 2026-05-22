@@ -194,7 +194,7 @@ full manifest. Key groups:
   `IP_HASH_PEPPER`, `METRICS_TOKEN`, `SESSION_TTL_HOURS`
 - **MinIO / S3** — `MINIO_*` (server-side root creds + console),
   `S3_*` (gateway's client-side creds + endpoint + bucket)
-- **Email** — `RESEND_API_KEY`, `FROM_EMAIL`
+- **Email** — `RESEND_API_KEY`, `RESEND_BASE_URL`, `FROM_EMAIL`
 - **Livepeer daemons + chain** — `CHAIN_RPC`, `CHAIN_ID`,
   `AI_SERVICE_REGISTRY_ADDRESS`, `CONTROLLER_ADDRESS`,
   `LIVEPEER_KEYSTORE_DIR`

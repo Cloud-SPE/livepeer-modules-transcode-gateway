@@ -83,6 +83,7 @@ The gateway, postgres, minio, and the two daemons share a
 | `MINIO_ROOT_PASSWORD` | MinIO root credential. | `openssl rand -base64 32` |
 | `S3_SECRET_ACCESS_KEY` | MinIO-issued access key for the gateway. | `openssl rand -hex 32` |
 | `RESEND_API_KEY` | Email delivery. | from Resend dashboard |
+| `RESEND_BASE_URL` | Optional resend-go SDK base URL override for proxies or mocks. | `https://api.resend.com/` |
 
 Keep secrets out of git. Use the compose `.env` (git-ignored) or a
 secret manager.
