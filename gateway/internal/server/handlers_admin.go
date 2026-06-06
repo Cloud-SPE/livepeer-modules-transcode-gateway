@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/Cloud-SPE/livepeer-modules-transcode-gateway/gateway/internal/crypto"
-	"github.com/Cloud-SPE/livepeer-modules-transcode-gateway/gateway/internal/proxy/service"
 	"github.com/Cloud-SPE/livepeer-modules-transcode-gateway/gateway/internal/repo"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -447,41 +446,48 @@ func registerAdminRegistry(api huma.API, deps Deps) {
 		OperationID: "admin-registry-candidates",
 		Method:      http.MethodGet,
 		Path:        "/api/admin/registry/candidates",
-		Summary:     "Live SelectMany candidates straight from the resolver (uncached)",
+		Summary:     "Live orchestrator candidates straight from LOC (uncached)",
 		Tags:        []string{"admin"},
 	}, func(ctx context.Context, in *struct {
 		Capability string `query:"capability" doc:"defaults to ABR_CAPABILITY"`
-		Offering   string `query:"offering"   default:"default"`
+		Offering   string `query:"offering" doc:"optional; filters to one offering"`
 	}) (*AdminRegistryCandidatesOut, error) {
-		if deps.Resolver == nil {
-			return nil, huma.Error503ServiceUnavailable("resolver_unavailable")
+		if deps.LOC == nil {
+			return nil, huma.Error503ServiceUnavailable("loc_unavailable")
 		}
 		cap := in.Capability
 		if cap == "" {
 			cap = deps.Cfg.ABRCapability
 		}
-		cands, err := deps.Resolver.SelectMany(ctx, service.SelectRequest{
-			Capability: cap,
-			Offering:   in.Offering,
-		})
+		orchs, err := deps.LOC.ListOrchestrators(ctx, cap)
 		if err != nil {
-			return nil, huma.Error502BadGateway("resolver SelectMany failed", err)
+			return nil, huma.Error502BadGateway("loc list orchestrators failed", err)
 		}
 		out := &AdminRegistryCandidatesOut{}
 		out.Body.Capability = cap
 		out.Body.Offering = in.Offering
-		for _, c := range cands {
-			out.Body.Items = append(out.Body.Items, AdminRegistryCandidate{
-				WorkerURL:       c.WorkerURL,
-				EthAddress:      c.EthAddress,
-				Capability:      c.Capability,
-				Offering:        c.Offering,
-				PriceWei:        bigToString(c.PricePerWorkUnitWei),
-				WorkUnit:        c.WorkUnit,
-				QuoteID:         c.QuoteID,
-				QuoteVersion:    int64(c.QuoteVersion),
-				UnitsPerPrice:   int64(c.UnitsPerPrice),
-			})
+		// One item per (orchestrator × offering) for the requested
+		// capability. Quote metadata died with the resolver — LOC binds
+		// quotes inside CreateJob/OpenSession now.
+		for _, o := range orchs {
+			for _, c := range o.Capabilities {
+				if c.Name != cap {
+					continue
+				}
+				for _, off := range c.Offerings {
+					if in.Offering != "" && off.ID != in.Offering {
+						continue
+					}
+					out.Body.Items = append(out.Body.Items, AdminRegistryCandidate{
+						WorkerURL:  o.WorkerURL,
+						EthAddress: o.EthAddress,
+						Capability: c.Name,
+						Offering:   off.ID,
+						PriceWei:   off.PricePerWorkUnitWei.String(),
+						WorkUnit:   off.WorkUnit,
+					})
+				}
+			}
 		}
 		return out, nil
 	})

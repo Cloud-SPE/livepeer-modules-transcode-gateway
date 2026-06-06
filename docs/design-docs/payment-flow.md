@@ -2,9 +2,9 @@
 
 How `Livepeer-Payment` envelopes get minted for `/api/v1/*` requests.
 
-> **Migration status:** ABR (VOD) runs on the **LOC** (Livepeer Open
-> Clearinghouse) jobs API as of PR-1. Live still mints via the local
-> payer-daemon + resolver pair and moves to LOC sessions in PR-3.
+> Both surfaces mint via the **LOC** (Livepeer Open Clearinghouse):
+> ABR through the jobs API, live through the sessions API. No local
+> daemons or operator keystore are involved.
 
 ## VOD (LOC jobs)
 
@@ -46,29 +46,43 @@ Notes:
 - **No idempotency keys** on LOC creates — the gateway never blindly
   retries a create after an ambiguous timeout (double-encumbrance risk).
 
-## Live (session-bound, legacy daemons until PR-3)
+## Live (LOC sessions)
 
 ```
 client → POST /api/v1/live
   gateway opens long-lived usage_reservations + live_streams (status='provisioning')
-  gateway calls Resolver.SelectMany(capability=video:transcode.live)
-  pick top candidate (no failover on session-open — live can't retry mid-handshake)
-  gateway calls PayerDaemon.CreatePayment(face_value, …) with face_value
-    sized for the session's estimated initial budget
-  gateway POSTs broker.OpenSession with Livepeer-Payment header
-  broker returns {session_id, rtmp_url, stream_key, hls_url}
-  gateway updates live_streams (status='live', urls populated)
+  gateway mints stream keys + per-session S3 STS credentials
+  gateway calls LOC POST /v1/sessions {capability, offering,
+    estimated_runway_units=60000, max_total_units=LIVE_MAX_TOTAL_UNITS}
+    → {session_id, work_id, broker_url, payment_envelope}
+  gateway POSTs broker /v1/cap (gateway-ingest mode) with Livepeer-Payment
+  on INVALID_RECIPIENT_RAND → close LOC session (0 units), open a fresh
+    one, retry once
+  broker returns {broker_session_id, private_ingest_url}
+  gateway activates live_streams (status='live', loc_session_id persisted)
   gateway → client {id, ingest, playback}
 
-during the session:
-  broker debits the payment session via payment-daemon as work-units accrue
-  if balance is exhausted → broker tears down RTMP → live_streams.status='ended'
+during the session (reconciler tick):
+  runway below threshold → LOC POST /v1/sessions/{id}/refill
+    → fresh envelope (pinned to the SAME broker; same work_id)
+  gateway POSTs broker /v1/cap/{bsess}/topup with the envelope
+  cap_status.will_refuse_next_refill=true → warn; stream ends when this
+    funding drains (or wind down on the cap refusal)
+  refill refused (cap) / rotation unrecoverable → graceful wind-down:
+    broker end + LOC close + RTMP teardown
 
-client → DELETE /api/v1/live/:id
-  gateway calls broker.CloseSession
-  gateway settles via payment-daemon
-  gateway updates live_streams.status='ended', usage_reservations.state='committed'
+client → DELETE /api/v1/live/:id (or broker ends the session)
+  gateway calls broker /v1/cap/{bsess}/end
+  gateway calls LOC POST /v1/sessions/{id}/close
+    {actual_units = min(elapsed_secs × 1000, LIVE_MAX_TOTAL_UNITS)}
+    — a duration ESTIMATE: the broker reports only runway, never
+    consumed units; LOC's daemon-ledger reconciliation is authoritative
+  ClaimLOCClose (loc_closed_at) makes DELETE vs reconciler race-safe
 ```
+
+One reservation row per live session — refills bump
+`live_streams.loc_refill_count` instead of opening per-envelope rows
+(LOC's session ledger is the authoritative money log).
 
 Live streams do **not** failover on broker failure mid-session.
 Restarting requires a fresh `POST /api/v1/live` — that's a client
@@ -78,10 +92,11 @@ responsibility.
 
 | File | Role |
 |---|---|
-| `gateway/internal/proxy/loc/` | HTTP client to LOC: `CreateJob` / `SettleJob` (+ sessions for PR-3); error matchers; settle retry policy. |
+| `gateway/internal/proxy/loc/` | HTTP client to LOC: jobs + sessions + capabilities; error matchers; settle retry policy. |
 | `gateway/internal/server/handlers_v1.go` | ABR create→dispatch→settle loop incl. rotation retry; `settleLOCJob` helper. |
 | `gateway/internal/server/settle_janitor.go` | Re-drives stuck `settle_state='pending'` rows. |
-| `gateway/internal/proxy/livepeer/payment.go` | (live only, until PR-3) gRPC client to `payment-daemon`. |
+| `gateway/internal/server/live_loc.go` | `closeLiveLOCSession` — race-safe LOC session settlement (DELETE vs reconciler). |
+| `gateway/internal/server/live_reconciler.go` | Refill + winddown orchestration for live sessions. |
 | `gateway/internal/proxy/livepeer/headers.go` | Attaches the envelope to outbound broker requests as `Livepeer-Payment`. |
 
 ## Failure semantics (ABR / LOC)
@@ -102,5 +117,5 @@ responsibility.
   repo's DESIGN.md.
 - The ticket math itself — see go-livepeer's `pm` package and the
   `payee_daemon.proto` types.
-- Operator-side keystore funding (live path only until PR-3) — see
+- LOC-account onboarding and credit funding — see
   [`../../DEPLOYMENT.md`](../../DEPLOYMENT.md).

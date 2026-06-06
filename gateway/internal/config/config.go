@@ -43,8 +43,6 @@ type Config struct {
 	S3SecretAccessKey string `env:"S3_SECRET_ACCESS_KEY"`
 	S3PresignTTLSecs  int    `env:"S3_PRESIGN_TTL_SECONDS" envDefault:"3600"`
 
-	PayerSocket    string        `env:"LIVEPEER_PAYER_DAEMON_SOCKET" envDefault:"/var/run/livepeer/payer-daemon.sock"`
-	ResolverSocket string        `env:"LIVEPEER_RESOLVER_SOCKET" envDefault:"/var/run/livepeer/service-registry.sock"`
 	RefreshMS      int           `env:"REGISTRY_REFRESH_INTERVAL_MS" envDefault:"60000"`
 	RefreshInterval time.Duration // derived
 
@@ -76,6 +74,10 @@ type Config struct {
 	LiveReconcileIntervalSecs  int `env:"LIVE_RECONCILE_INTERVAL_SECS" envDefault:"30"`
 	LiveTopupRunwayThresholdSecs int `env:"LIVE_TOPUP_RUNWAY_THRESHOLD_SECS" envDefault:"60"`
 	LiveTopupFundSecs          int `env:"LIVE_TOPUP_FUND_SECS" envDefault:"60"`
+	// LiveMaxTotalUnits caps a LOC live session's lifetime spend (LOC
+	// encumbers toward this ceiling and refuses refills beyond it). At
+	// ~1000 units/sec of output the default funds ~100 minutes.
+	LiveMaxTotalUnits int64 `env:"LIVE_MAX_TOTAL_UNITS" envDefault:"6000000"`
 
 	// live-session-gateway-ingest@v0 (plan 0003). When LiveRTMPPort > 0
 	// the gateway runs an RTMP server on that port and accepts ingest
@@ -119,7 +121,7 @@ func (c Config) Warnings() []string {
 		w = append(w, "S3 credentials unset — /api/v1/abr/upload-url will return 503")
 	}
 	if c.LOCAPIKey == "" {
-		w = append(w, "LOC_API_KEY unset — /api/v1/abr will return 503 loc_unavailable")
+		w = append(w, "LOC_API_KEY unset — /api/v1/abr and /api/v1/live will return 503 loc_unavailable")
 	}
 	return w
 }

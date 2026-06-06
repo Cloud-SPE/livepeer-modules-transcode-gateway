@@ -21,9 +21,9 @@ import (
 	"time"
 )
 
-// Client talks to one LOC deployment with one API key. Nil-safe the
-// same way PayerClient is: a nil *Client means "LOC not configured" and
-// handlers return 503.
+// Client talks to one LOC deployment with one API key. Nil-safe by
+// convention: a nil *Client means "LOC not configured" and handlers
+// return 503.
 type Client struct {
 	httpc   *http.Client
 	baseURL string

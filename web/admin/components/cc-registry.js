@@ -3,7 +3,7 @@ import { api } from '../lib/api.js';
 
 // Three-panel registry diagnostic:
 //   1. Summary       — cache freshness + capability filter + counts
-//   2. Live candidates — straight from the resolver (uncached, real-time)
+//   2. Live candidates — straight from LOC (uncached, real-time)
 //   3. Cached catalog — what /v1/capabilities returns
 // (Route health died with the LOC migration — LOC owns route selection.)
 
@@ -118,8 +118,8 @@ class CcRegistry extends LitElement {
           <button class="ghost" @click=${this.#load} style="float:right">Refresh</button>
         </h2>
         <p class="msg">
-          Straight from the resolver — not the cache. This is what
-          <code>/v1/abr</code> would dispatch against right now.
+          Straight from LOC — not the cache. These are the orchestrators
+          LOC can route <code>/v1/abr</code> and <code>/v1/live</code> to right now.
         </p>
         ${caps.length === 0
           ? html`<p class="msg">No capabilities cached; nothing to query.</p>`
@@ -132,7 +132,7 @@ class CcRegistry extends LitElement {
         ${!c
           ? html`<p class="msg">—</p>`
           : (c.items?.length ?? 0) === 0
-            ? html`<p class="msg warn">Zero candidates. The resolver doesn't see anyone advertising this right now.</p>`
+            ? html`<p class="msg warn">Zero candidates. LOC doesn't see anyone advertising this right now.</p>`
             : html`<table>
                 <thead><tr>
                   <th>Worker</th><th>Eth address</th><th>Price (wei/unit)</th>

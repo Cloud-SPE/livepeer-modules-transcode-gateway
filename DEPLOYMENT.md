@@ -32,21 +32,20 @@ API, the three SPAs (embedded), `/health`, and `/metrics` from one port
                 └───┬────┘           └────────┘
                     │  ▲
                     │  └── OBS / ffmpeg push RTMP to :1935
-        ┌───────────┼─────────────┐
-        │           │             │
-        ▼           ▼             ▼
-   ┌─────────┐ ┌─────────┐  ┌──────────┐
-   │ postgres│ │ payer-  │  │service-  │
-   │  :5432  │ │ daemon  │  │registry- │
-   └─────────┘ │  (UDS)  │  │ daemon   │
-               └────┬────┘  └────┬─────┘
-                    │            │
-                    ▼            ▼
-                  chain RPC  +  on-chain registry
+        ┌───────────┴──────────────┐
+        │                          │
+        ▼                          ▼
+   ┌─────────┐            ┌──────────────────────┐
+   │ postgres│            │ LOC clearinghouse    │
+   │  :5432  │            │ loc.cloudspe.com      │
+   └─────────┘            │ (HTTPS, pymth_ key)   │
+                          └──────────────────────┘
 ```
 
-The gateway, postgres, minio, and the two daemons share a
-`livepeer-run` volume for UDS sockets.
+The gateway reaches LOC over plain HTTPS using an operator-issued
+`pymth_` API key. There are no local UDS daemons, no `livepeer-run`
+volume, and no operator keystore: LOC mints payment envelopes, selects
+routes, settles the ledger, and serves the capability catalog.
 
 ---
 
@@ -61,9 +60,9 @@ The gateway, postgres, minio, and the two daemons share a
       headroom for VOD uploads + live HLS output** (size to your traffic).
 - [ ] Public RTMP TCP port 1935 reachable (or set `LIVE_RTMP_PORT=0` to
       disable live ingest).
-- [ ] An EVM JSON-RPC endpoint (Arbitrum One default).
-- [ ] A funded Ethereum keystore for the payer-daemon.
-- [ ] An `AI_SERVICE_REGISTRY_ADDRESS` for the chain you're on.
+- [ ] A LOC (Livepeer Open Clearinghouse) account: an operator-issued
+      `pymth_` API key (`LOC_API_KEY`) and a funded credit balance on
+      LOC. See **LOC onboarding** below.
 - [ ] Resend account + API key (or commit to running without email).
 - [ ] A copy of `.env.example` with every value filled, including
       `S3_*` and `MINIO_*`.
@@ -82,11 +81,38 @@ The gateway, postgres, minio, and the two daemons share a
 | `METRICS_TOKEN` | Bearer token on `/metrics`. | `openssl rand -hex 32` |
 | `MINIO_ROOT_PASSWORD` | MinIO root credential. | `openssl rand -base64 32` |
 | `S3_SECRET_ACCESS_KEY` | MinIO-issued access key for the gateway. | `openssl rand -hex 32` |
+| `LOC_API_KEY` | Operator `pymth_` key authorizing the gateway against LOC. | issued by the LOC operator |
 | `RESEND_API_KEY` | Email delivery. | from Resend dashboard |
 | `RESEND_BASE_URL` | Optional resend-go SDK base URL override for proxies or mocks. | `https://api.resend.com/` |
 
 Keep secrets out of git. Use the compose `.env` (git-ignored) or a
 secret manager.
+
+---
+
+## LOC onboarding
+
+The gateway no longer runs its own payer/resolver daemons or holds an
+operator keystore. Payments and routing are delegated to **LOC — the
+Livepeer Open Clearinghouse** (hosted at `https://loc.cloudspe.com`).
+
+1. **Get a key.** Ask the LOC operator for a `pymth_` API key scoped to
+   your account. Set it as `LOC_API_KEY`. Point `LOC_BASE_URL` at the
+   clearinghouse (default `https://loc.cloudspe.com`).
+2. **Fund the balance.** Credit is held and managed *on LOC*, not in a
+   local wallet. Top up your account's balance through the LOC operator
+   / LOC admin before going live; the gateway encumbers worst-case
+   credit at job-create time and releases the unused remainder on
+   settle.
+3. **Monitor on LOC.** Balance, encumbrance, and per-job/per-session
+   ledger reconciliation are observable in the LOC admin — that ledger
+   is authoritative. The gateway's `usage_reservations` /
+   `live_streams` tables are its local view; LOC is the source of truth
+   for what was billed.
+
+If `LOC_API_KEY` is unset, `/api/v1/abr` and `/api/v1/live` fail closed
+with `503 loc_unavailable`; the SaaS shell (waitlist, portal, admin)
+still runs.
 
 ---
 
@@ -104,10 +130,11 @@ docker compose build gateway
 
 # 3. db + minio + bootstrap + gateway
 make dev
-
-# 4. plus livepeer daemons
-make dev-livepeer
 ```
+
+Make sure `LOC_BASE_URL` + `LOC_API_KEY` are set in `.env` before you
+exercise `/api/v1/abr` or `/api/v1/live` — without them those endpoints
+return `503 loc_unavailable`.
 
 After startup the gateway is real. Don't ship to users until you've
 done end-to-end validation:
@@ -115,7 +142,8 @@ done end-to-end validation:
 1. **Sign up a test user** through the real flow (waitlist → verify →
    admin approve → API key emailed).
 2. **Confirm `/api/v1/capabilities`** returns a non-empty catalog. Empty →
-   registry-daemon hasn't synced; check its logs.
+   LOC catalog is empty or unreachable; check the gateway's
+   capability-refresh logs and `/health`'s `loc` check.
 3. **POST `/api/v1/abr`** with a sample MP4 URL or via the
    `/api/v1/abr/upload-url` flow against MinIO. Expect a `job_id` +
    `master_playlist_url`. Wait for the runner to finish, then play the
@@ -222,14 +250,15 @@ Prometheus scrapes `/metrics`. Surfaces:
 - `video_gateway_proxy_reservations_total{capability,outcome}`
 - `video_gateway_live_streams_active`
 - `video_gateway_waitlist_signups_total`
-- `livepeer_gateway_route_health_*`
 
 Recommended starter alerts:
 
 - 5xx rate above 1% sustained 5 min on `/api/v1/*`
 - `proxy_reservations_total{outcome="refunded"}` rising sharply vs `committed`
-- `livepeer_gateway_route_health_cooldowns_opened_total` rising
+- `503 loc_unavailable` on `/api/v1/*` (LOC unreachable — fail-closed)
 - `live_streams_active` flatlining when ingest should be flowing
+- Reservations accumulating in `settle_state='pending'` (settle janitor
+  not draining — LOC settle calls failing)
 
 ---
 
@@ -240,11 +269,11 @@ Recommended starter alerts:
 | `/health` shows `db: error` | Postgres down or wrong DATABASE_URL | `docker compose logs db` |
 | `/health` shows `minio: error` | minio container down, or bootstrap failed | `docker compose logs minio minio-bootstrap` |
 | `/health` shows `rtmp: error` | RTMP listener didn't bind to `LIVE_RTMP_PORT` (port in use, perms) | `docker compose logs gateway` |
-| `/health` shows `payer: error` | Payer-daemon not running or socket path mismatch | `docker compose logs payer-daemon` |
-| `/health` shows `registry: error` | Registry-daemon not running, or chain RPC unreachable | `docker compose logs service-registry-daemon` |
-| `/api/v1/capabilities` returns `data: []` | No transcode capabilities advertised on-chain, or registry-daemon hasn't synced | Registry-daemon logs; wait one refresh cycle |
+| `/health` shows `loc: error` | LOC unreachable, `LOC_BASE_URL` wrong, or `LOC_API_KEY` invalid/expired | gateway logs; curl `LOC_BASE_URL/v1/capabilities` with the key |
+| `/api/v1/abr` or `/api/v1/live` returns `503 loc_unavailable` | `LOC_API_KEY` unset, LOC down, or out of credit balance | gateway logs; LOC admin (balance) |
+| `/api/v1/capabilities` returns `data: []` | LOC catalog empty or last refresh failed | gateway capability-refresh logs; wait one refresh cycle |
 | `/api/v1/abr/upload-url` returns 503 | MinIO unreachable or credentials wrong | `docker compose logs minio gateway` |
-| `/api/v1/live` returns 502 | No broker advertising `video:transcode.live` with offering `gateway-ingest` | Registry-daemon logs |
+| Live stream ends with `close_reason=rotation_unrecoverable` | A refill hit broker `INVALID_RECIPIENT_RAND`; retried once then ended gracefully. LOC exposes no rotation-recovery primitive yet (known limitation). | gateway live-reconciler logs |
 | RTMP push immediately drops | Stream key didn't match `live_streams.stream_key_hash`, or upstream broker tore down session | Broker logs (operator side) + gateway logs filtered by `live_id` |
 | Verification emails not arriving | RESEND_API_KEY missing/invalid | gateway logs — `verification email send failed` |
 | `/api/v1/abr` jobs sit at `processing` forever, never produce `master.m3u8` | Almost always orchestrator-side: runner's CUDA toolkit > host's NVIDIA driver, or unpatched NVENC session cap exhausted. Gateway is blind because the broker doesn't pass-through runner status. | [`docs/troubleshooting/runner-cuda-driver-mismatch.md`](./docs/troubleshooting/runner-cuda-driver-mismatch.md) |

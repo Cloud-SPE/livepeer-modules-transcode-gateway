@@ -151,6 +151,11 @@ type LiveStream struct {
 	// recently reported (ingest + output blocks). Nil if absent. Admin
 	// UI parses opportunistically; the gateway never interprets it.
 	RunnerStatusJSON  []byte
+	// LOC session linkage (migration 0010). Nil for pre-LOC rows.
+	LOCSessionID   *uuid.UUID
+	LOCWorkID      *string
+	LOCRefillCount int
+	LOCClosedAt    *time.Time
 }
 
 type Capability struct {

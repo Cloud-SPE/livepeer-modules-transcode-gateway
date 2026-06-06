@@ -64,7 +64,8 @@ func New() *Registry {
 			Name: "livepeer_gateway_session_rotation_retries_total",
 			Help: "INVALID_RECIPIENT_RAND retries observed by the dispatcher, by capability and outcome.",
 		}, []string{"capability", "outcome"}),
-		// Outcomes: succeeded, mint_failed, broker_failed, resolver_failed.
+		// Outcomes: succeeded, cap_reached, refill_failed, broker_failed,
+		// rotation_unrecoverable, loc_unavailable, no_loc_session.
 		// Fires from the live reconciler's auto-topup path. Distinct from
 		// SessionRotationRetries because a top-up triggered by runway
 		// exhaustion is a different signal than a session-rand rotation.

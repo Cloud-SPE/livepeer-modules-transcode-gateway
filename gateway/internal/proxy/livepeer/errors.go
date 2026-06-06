@@ -6,15 +6,6 @@ import (
 	"strings"
 )
 
-// ErrPayerUnavailable is returned when the payer-daemon socket isn't reachable.
-var ErrPayerUnavailable = errors.New("payer-daemon unavailable")
-
-// ErrResolverUnavailable is returned when the resolver socket isn't reachable.
-var ErrResolverUnavailable = errors.New("resolver daemon unavailable")
-
-// ErrNoCapableBroker is returned when the resolver returns zero candidates.
-var ErrNoCapableBroker = errors.New("no capable broker found")
-
 // BrokerError carries an upstream broker response that we treat as terminal.
 type BrokerError struct {
 	URL        string
@@ -40,8 +31,8 @@ func IsRetryable(err error) bool {
 }
 
 // IsInvalidRecipientRandError reports whether err is the broker's
-// signal that the receiver's session has rotated and we need to evict
-// our payer-daemon cache + re-mint the payment.
+// signal that the receiver's payment session has rotated and the
+// caller needs a freshly-minted envelope (a new LOC job / refill).
 //
 // v1.3.1 capability-broker shape:
 //

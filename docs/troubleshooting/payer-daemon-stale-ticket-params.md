@@ -1,5 +1,12 @@
 # Payer-daemon: stale `TicketParams` after receiver-side rotation
 
+> **HISTORICAL (2026-06-06).** The gateway no longer runs a local
+> payer-daemon — payment minting moved to LOC (Livepeer Open
+> Clearinghouse), which operates the sender-side daemon on its end.
+> Kept for operators of LOC itself / archeology. The gateway-side
+> symptom today is covered by
+> [`loc-refill-rotation.md`](./loc-refill-rotation.md).
+
 Operator-side recipe for a recurring class of failure where the
 receiver-side payment-daemon rejects our minted tickets mid-session
 with a cryptographic mismatch — because our payer-daemon is signing

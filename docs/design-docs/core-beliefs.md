@@ -70,7 +70,7 @@ actual state.
 
 ## 8. Capabilities reflect reality
 
-`/api/v1/capabilities` returns what the resolver advertises *right now*,
+`/api/v1/capabilities` returns what LOC's catalog advertises *right now*,
 refreshed every `REGISTRY_REFRESH_INTERVAL_MS`. There is no hand-
 curated catalog. If a capability disappears on-chain, it disappears
 from the API within one refresh cycle.

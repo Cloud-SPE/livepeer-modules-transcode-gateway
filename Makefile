@@ -6,15 +6,15 @@
 .DEFAULT_GOAL := help
 
 # ── Docker image publishing ─────────────────────────────────────────
-# Matches the convention used by sibling repos (capability-broker,
-# payment-daemon, service-registry-daemon): manual publish with
+# Matches the convention used by sibling repos (capability-broker):
+# manual publish with
 # multi-arch buildx, pushed to tztcloud/* on Docker Hub. Authenticate
 # first with `docker login docker.io -u <your-dockerhub-username>`.
 IMAGE ?= tztcloud/livepeer-video-gateway
 TAG   ?= dev
 
 .PHONY: help install build lint test dev down logs clean smoke web site-ui portal-ui admin-ui \
-        go-build go-test go-lint go-tidy proto sqlc \
+        go-build go-test go-lint go-tidy sqlc \
         docker-build docker-publish embed-webroot
 
 help:
@@ -26,7 +26,6 @@ help:
 	@echo "  make test           go test + pnpm -r test"
 	@echo ""
 	@echo "  make dev            bring up gateway + db + minio via docker compose"
-	@echo "  make dev-livepeer   same as dev, plus payer + resolver daemons"
 	@echo "  make down           tear down dev compose stack"
 	@echo "  make logs           tail dev compose logs"
 	@echo "  make smoke          end-to-end smoke test against the dev stack"
@@ -40,7 +39,6 @@ help:
 	@echo "  make go-test        go test ./..."
 	@echo "  make go-lint        go vet ./..."
 	@echo "  make go-tidy        go mod tidy"
-	@echo "  make proto          regenerate protoc-gen-go stubs into gateway/gen/proto/"
 	@echo "  make sqlc           regenerate sqlc queries into gateway/gen/db/"
 	@echo ""
 	@echo "  make docker-build TAG=v1.3.0"
@@ -65,9 +63,6 @@ test: go-test
 
 dev:
 	docker compose up -d db minio minio-bootstrap gateway
-
-dev-livepeer:
-	docker compose --profile livepeer up -d
 
 down:
 	docker compose down
@@ -126,9 +121,6 @@ go-lint:
 
 go-tidy:
 	cd gateway && go mod tidy
-
-proto:
-	./scripts/gen-proto.sh
 
 sqlc:
 	cd gateway && sqlc generate

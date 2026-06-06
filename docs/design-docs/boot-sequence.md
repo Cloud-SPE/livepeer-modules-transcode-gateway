@@ -18,17 +18,17 @@ in spirit; the Go shape is different.
    elsewhere). A startup head-bucket call confirms reachability;
    failure logs a warning but does not exit (the SaaS surface still
    works without VOD ingest).
-5. **Wire gRPC clients.** Best-effort dial to
-   `LIVEPEER_RESOLVER_SOCKET` and `LIVEPEER_PAYER_DAEMON_SOCKET`.
-   Missing sockets log a warning; `/api/v1/*` returns 500/503 at request
-   time until they're reachable.
-6. **Start RegistryCatalog refresh loop.** First refresh runs
-   synchronously so `/api/v1/capabilities` is non-empty by the time the
-   server accepts traffic. Subsequent refreshes run on a `time.Ticker`
-   every `REGISTRY_REFRESH_INTERVAL_MS`.
+5. **Construct the LOC client.** `LOC_BASE_URL` + `LOC_API_KEY` over
+   HTTPS — no dial step, no local daemons. When the key is unset the
+   client is nil and `/api/v1/abr|live` return `503 loc_unavailable`.
+6. **Start background loops.** The capability-catalog refresh (first
+   tick synchronous so `/api/v1/capabilities` is non-empty by the time
+   the server accepts traffic; sources LOC `GET /v1/capabilities` every
+   `REGISTRY_REFRESH_INTERVAL_MS`), the live reconciler, and the settle
+   janitor (`SETTLE_JANITOR_INTERVAL_SECS`).
 7. **Construct ServerDeps.** A single struct threaded into every
-   handler: db pool, repos, S3 client, payer client, route selector,
-   rate limiter, email client, config, logger.
+   handler: db pool, repos, S3 client, LOC client, rate limiter, email
+   client, config, logger.
 8. **Mount huma API.** Each handler registers a `huma.Operation` —
    that's both the route table and the OpenAPI spec.
 9. **Listen.** chi router on `:PORT` (default 4000). `/health`
@@ -40,8 +40,9 @@ Step 9 finishing means the server accepts traffic; the
 ## Shutdown
 
 `os.Interrupt` triggers `http.Server.Shutdown(ctx)` with a 15s
-deadline. In-flight handlers drain; the registry refresh ticker stops.
-The payment + resolver gRPC clients close. The DB pool closes last.
+deadline. In-flight handlers drain; the background tickers (catalog
+refresh, live reconciler, settle janitor) stop. The DB pool closes
+last.
 
 There is no "drain mode" exposed to load balancers in v1 — the
 existing `/health` contract is what they read.

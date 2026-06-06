@@ -19,7 +19,6 @@ import (
 	"github.com/Cloud-SPE/livepeer-modules-transcode-gateway/gateway/internal/metrics"
 	"github.com/Cloud-SPE/livepeer-modules-transcode-gateway/gateway/internal/proxy/livepeer"
 	"github.com/Cloud-SPE/livepeer-modules-transcode-gateway/gateway/internal/proxy/loc"
-	"github.com/Cloud-SPE/livepeer-modules-transcode-gateway/gateway/internal/proxy/service"
 	"github.com/Cloud-SPE/livepeer-modules-transcode-gateway/gateway/internal/registry"
 	"github.com/Cloud-SPE/livepeer-modules-transcode-gateway/gateway/internal/repo"
 	"github.com/Cloud-SPE/livepeer-modules-transcode-gateway/gateway/internal/rtmp"
@@ -91,17 +90,8 @@ func run() error {
 		}
 	}
 
-	// gRPC clients (best-effort dial) — live path only; ABR runs on LOC.
-	payer, err := livepeer.DialPayer(ctx, cfg.PayerSocket)
-	if err != nil {
-		log.Warn("payer dial failed (gateway will return 503 on /v1/live)", "err", err)
-	}
-	resolver, err := service.DialResolver(ctx, cfg.ResolverSocket)
-	if err != nil {
-		log.Warn("resolver dial failed (gateway will return 503 on /v1/live)", "err", err)
-	}
-
-	// LOC client (jobs API). Nil when LOC_API_KEY is unset — /v1/abr 503s.
+	// LOC client — payments + route selection for all /v1/* work. Nil
+	// when LOC_API_KEY is unset; /v1/abr and /v1/live return 503.
 	locClient := loc.NewClient(cfg.LOCBaseURL, cfg.LOCAPIKey, sdkIdentity, 30*time.Second)
 
 	// Metrics
@@ -126,8 +116,6 @@ func run() error {
 		Caps:     caps,
 		Email:    mailer,
 		S3:       s3c,
-		Payer:    payer,
-		Resolver: resolver,
 		LOC:      locClient,
 		HTTP:     livepeer.NewHTTPClient(30 * time.Second),
 		CapMap:   livepeer.NewDefault(cfg.ABRCapability, cfg.LiveCapability),
@@ -188,12 +176,6 @@ func run() error {
 	defer shutdownCancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		log.Warn("shutdown returned an error", "err", err)
-	}
-	if payer != nil {
-		_ = payer.Close()
-	}
-	if resolver != nil {
-		_ = resolver.Close()
 	}
 	log.Info("server stopped")
 	return nil

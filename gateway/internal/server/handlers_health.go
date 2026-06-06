@@ -54,31 +54,19 @@ func RegisterHealth(api huma.API, deps Deps) {
 		s3State.LatencyMs = time.Since(t).Milliseconds()
 		out.Body.Checks["s3"] = s3State
 
-		// payer
-		pState := HealthCheck{Status: "skipped"}
+		// LOC (clearinghouse) — payments + route selection for /v1/*.
+		// Probed via the read-only capability catalog.
+		locState := HealthCheck{Status: "skipped"}
 		t = time.Now()
-		if deps.Payer != nil {
-			if err := deps.Payer.Health(ctx); err != nil {
-				pState = HealthCheck{Status: "error", Error: err.Error()}
+		if deps.LOC != nil {
+			if err := deps.LOC.Healthy(ctx); err != nil {
+				locState = HealthCheck{Status: "error", Error: err.Error()}
 			} else {
-				pState = HealthCheck{Status: "ok"}
+				locState = HealthCheck{Status: "ok"}
 			}
 		}
-		pState.LatencyMs = time.Since(t).Milliseconds()
-		out.Body.Checks["payer"] = pState
-
-		// resolver
-		rState := HealthCheck{Status: "skipped"}
-		t = time.Now()
-		if deps.Resolver != nil {
-			if err := deps.Resolver.Health(ctx); err != nil {
-				rState = HealthCheck{Status: "error", Error: err.Error()}
-			} else {
-				rState = HealthCheck{Status: "ok"}
-			}
-		}
-		rState.LatencyMs = time.Since(t).Milliseconds()
-		out.Body.Checks["registry"] = rState
+		locState.LatencyMs = time.Since(t).Milliseconds()
+		out.Body.Checks["loc"] = locState
 
 		// rtmp ingress (plan 0003). Status "skipped" when LIVE_RTMP_PORT=0;
 		// "ok" when the listener is bound; "error" when the listener
@@ -97,7 +85,7 @@ func RegisterHealth(api huma.API, deps Deps) {
 		case dbState.Status == "error":
 			out.Body.Status = "down"
 			return out, huma.Error503ServiceUnavailable("db_down")
-		case s3State.Status == "error" || pState.Status == "error" || rState.Status == "error":
+		case s3State.Status == "error" || locState.Status == "error":
 			out.Body.Status = "degraded"
 		default:
 			out.Body.Status = "ok"

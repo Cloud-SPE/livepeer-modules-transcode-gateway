@@ -48,11 +48,10 @@ before making load-bearing decisions.
 
 | Path | What it is |
 |---|---|
-| [`gateway/`](./gateway/) | Go backend — single binary: transcode `/api/v1/*` API (`/api/v1/abr`, `/api/v1/live`, …), waitlist + auth + admin SaaS shell, gRPC clients to `service-registry-daemon` + `payment-daemon`, S3 + STS client to MinIO, RTMP ingest listener on `:1935`, and the three SPAs embedded via `//go:embed`. |
+| [`gateway/`](./gateway/) | Go backend — single binary: transcode `/api/v1/*` API (`/api/v1/abr`, `/api/v1/live`, …), waitlist + auth + admin SaaS shell, HTTP client to LOC (the Livepeer Open Clearinghouse — payments + route selection), S3 + STS client to MinIO, RTMP ingest listener on `:1935`, and the three SPAs embedded via `//go:embed`. |
 | [`web/site/`](./web/site/) | Zero-build Lit marketing site + waitlist signup. |
 | [`web/portal/`](./web/portal/) | Zero-build Lit user dashboard (account, API keys, playground with Live + Transcode tabs). |
 | [`web/admin/`](./web/admin/) | Zero-build Lit admin (waitlist queue, users, usage, transcode-capability registry). |
-| [`proto/`](./proto/) | gRPC protos shared between the gateway and the registry / payer daemons. Codegen target: `gateway/gen/proto/`. |
 
 ## Doing work in this repo
 
@@ -66,12 +65,13 @@ before making load-bearing decisions.
 - **Zero-build SPAs.** `web/` apps use Lit + `esm.sh` importmaps + a
   per-app `dev-server.js`. No Vite, no bundler. See
   [`FRONTEND.md`](./FRONTEND.md) for DOM/CSS invariants.
-- **Gateway pays the network.** Every `/api/v1/*` request mints a
-  `Livepeer-Payment` envelope via `payment-daemon`. Live streams mint
-  on session open and interim-debit during the session.
-- **Capabilities come from the service registry.** No hardcoded
-  capability list. `/api/v1/capabilities` reflects what the on-chain
-  registry advertises.
+- **Gateway pays the network via LOC.** Every `/api/v1/*` request mints
+  a `Livepeer-Payment` envelope through LOC (jobs API for ABR, sessions
+  API for live); the gateway settles actual units back and a settle
+  janitor releases anything stuck. No local daemons, no keystore.
+- **Capabilities come from LOC's catalog.** No hardcoded capability
+  list. `/api/v1/capabilities` reflects what LOC's discovery API
+  advertises.
 - **No Stripe, no billing, no rate cards in v1.** Auth shape is
   waitlist → email verify → admin approval → API key by email.
 - **VOD ingest lands in MinIO.** The compose stack stands up MinIO

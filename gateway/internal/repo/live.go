@@ -26,6 +26,7 @@ const liveSelectCols = `id, api_key_id, reservation_id, name, status, capability
 	broker_session_id, runner_session_id, broker_work_id, close_reason, last_broker_sync_at,
 	s3_output_prefix, private_ingest_url, stream_key_hint,
 	runner_status_json,
+	loc_session_id, loc_work_id, loc_refill_count, loc_closed_at,
 	created_at, started_at, last_heartbeat_at, ended_at`
 
 type InsertLiveInput struct {
@@ -60,6 +61,8 @@ type ActivateLiveGatewayInput struct {
 	BrokerSessionID  string
 	RunnerSessionID  string
 	BrokerWorkID     *uuid.UUID
+	LOCSessionID     *uuid.UUID // LOC session funding this stream (migration 0010)
+	LOCWorkID        string     // LOC's hex work id; pinned across refills
 }
 
 func (r *LiveRepo) ActivateGatewayIngest(ctx context.Context, id uuid.UUID, in ActivateLiveGatewayInput) error {
@@ -69,13 +72,15 @@ func (r *LiveRepo) ActivateGatewayIngest(ctx context.Context, id uuid.UUID, in A
 	               stream_key_hash=$4, stream_key_hint=$5,
 	               s3_output_prefix=$6, private_ingest_url=$7, playback_url=$8,
 	               broker_session_id=$9, runner_session_id=$10, broker_work_id=$11,
+	               loc_session_id=$12, loc_work_id=$13,
 	               started_at=now(), last_heartbeat_at=now()
 	           WHERE id=$1 AND status='provisioning'`
 	tag, err := r.pool.Exec(ctx, q, id,
 		in.BrokerURL, in.EthAddress,
 		in.StreamKeyHash, nullable(in.StreamKeyHint),
 		in.S3OutputPrefix, in.PrivateIngestURL, in.PlaybackURL,
-		nullable(in.BrokerSessionID), nullable(in.RunnerSessionID), in.BrokerWorkID)
+		nullable(in.BrokerSessionID), nullable(in.RunnerSessionID), in.BrokerWorkID,
+		in.LOCSessionID, nullable(in.LOCWorkID))
 	if err != nil {
 		return err
 	}
@@ -83,6 +88,28 @@ func (r *LiveRepo) ActivateGatewayIngest(ctx context.Context, id uuid.UUID, in A
 		return errors.New("live_streams: row not provisioning (gateway_ingest)")
 	}
 	return nil
+}
+
+// IncrementLOCRefill bumps the per-session refill counter (one LOC
+// refill envelope delivered to the broker). LOC's ledger is the
+// authoritative money log; this is operator-facing visibility only.
+func (r *LiveRepo) IncrementLOCRefill(ctx context.Context, id uuid.UUID) error {
+	_, err := r.pool.Exec(ctx,
+		`UPDATE live_streams SET loc_refill_count = loc_refill_count + 1 WHERE id=$1`, id)
+	return err
+}
+
+// ClaimLOCClose marks the LOC session closed exactly once. Returns true
+// when this caller claimed the close — the DELETE handler and the
+// reconciler both attempt it, and only the winner calls LOC.
+func (r *LiveRepo) ClaimLOCClose(ctx context.Context, id uuid.UUID) (bool, error) {
+	tag, err := r.pool.Exec(ctx,
+		`UPDATE live_streams SET loc_closed_at = now()
+		 WHERE id=$1 AND loc_session_id IS NOT NULL AND loc_closed_at IS NULL`, id)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
 }
 
 // FindActiveByStreamKeyHash powers the RTMP server's per-publish auth
@@ -280,6 +307,7 @@ func scanLive(s pgx.Row) (*LiveStream, error) {
 		&l.BrokerSessionID, &l.RunnerSessionID, &l.BrokerWorkID, &l.CloseReason, &l.LastBrokerSyncAt,
 		&l.S3OutputPrefix, &l.PrivateIngestURL, &l.StreamKeyHint,
 		&l.RunnerStatusJSON,
+		&l.LOCSessionID, &l.LOCWorkID, &l.LOCRefillCount, &l.LOCClosedAt,
 		&l.CreatedAt, &l.StartedAt, &l.LastHeartbeatAt, &l.EndedAt)
 	if err != nil {
 		return nil, err

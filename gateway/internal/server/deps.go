@@ -8,7 +8,6 @@ import (
 	"github.com/Cloud-SPE/livepeer-modules-transcode-gateway/gateway/internal/metrics"
 	"github.com/Cloud-SPE/livepeer-modules-transcode-gateway/gateway/internal/proxy/livepeer"
 	"github.com/Cloud-SPE/livepeer-modules-transcode-gateway/gateway/internal/proxy/loc"
-	"github.com/Cloud-SPE/livepeer-modules-transcode-gateway/gateway/internal/proxy/service"
 	"github.com/Cloud-SPE/livepeer-modules-transcode-gateway/gateway/internal/repo"
 	"github.com/Cloud-SPE/livepeer-modules-transcode-gateway/gateway/internal/s3"
 
@@ -29,13 +28,10 @@ type Deps struct {
 	Caps     *repo.CapabilityRepo
 	Email    *email.Mailer
 	S3       *s3.Client
-	// Payer/Resolver are the legacy UDS daemon clients — still used by
-	// the live path until it moves to LOC sessions (PR-3). ABR runs on
-	// LOC as of PR-1.
-	Payer    *livepeer.PayerClient
-	Resolver *service.RouteSelector
-	LOC      *loc.Client
-	HTTP     *livepeer.HTTPClient
+	// LOC is the clearinghouse client: payments + route selection for
+	// both ABR jobs and live sessions. Nil when LOC_API_KEY is unset.
+	LOC  *loc.Client
+	HTTP *livepeer.HTTPClient
 	CapMap   livepeer.CapabilityMap
 	Metrics  *metrics.Registry
 	// RTMPProbe is a cheap readiness check the /health handler calls
