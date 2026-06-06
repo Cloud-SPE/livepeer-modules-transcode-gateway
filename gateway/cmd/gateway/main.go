@@ -107,8 +107,8 @@ func run() error {
 	// Metrics
 	met := metrics.New()
 
-	// Capability catalog refresh (best-effort)
-	refresher := registry.NewRefresher(resolver, caps, cfg.RefreshInterval,
+	// Capability catalog refresh from LOC's discovery API (best-effort)
+	refresher := registry.NewRefresher(locClient, caps, cfg.RefreshInterval,
 		[]string{cfg.ABRCapability, cfg.LiveCapability}, log)
 	go refresher.Start(ctx)
 
