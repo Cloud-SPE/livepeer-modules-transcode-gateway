@@ -148,9 +148,15 @@ services:
       S3_PRESIGN_TTL_SECONDS: ${S3_PRESIGN_TTL_SECONDS:-3600}
 
       # ── Livepeer plumbing ──
+      # Daemon sockets serve /v1/live only — ABR mints via LOC below.
       LIVEPEER_PAYER_DAEMON_SOCKET: /var/run/livepeer/payer-daemon.sock
       LIVEPEER_RESOLVER_SOCKET: ${LIVEPEER_RESOLVER_SOCKET:-/var/run/livepeer/service-registry.sock}
       REGISTRY_REFRESH_INTERVAL_MS: ${REGISTRY_REFRESH_INTERVAL_MS:-60000}
+
+      # ── LOC (Livepeer Open Clearinghouse) — payments for /v1/abr ──
+      LOC_BASE_URL: ${LOC_BASE_URL:-https://loc.cloudspe.com}
+      LOC_API_KEY: ${LOC_API_KEY:-}
+      SETTLE_JANITOR_INTERVAL_SECS: ${SETTLE_JANITOR_INTERVAL_SECS:-60}
       ABR_CAPABILITY: ${ABR_CAPABILITY:-video:transcode.abr}
       LIVE_CAPABILITY: ${LIVE_CAPABILITY:-video:transcode.live}
       # Offering label orchs advertise for the live-session-gateway-ingest@v0

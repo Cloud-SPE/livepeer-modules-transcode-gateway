@@ -18,6 +18,7 @@ import (
 	"github.com/Cloud-SPE/livepeer-modules-transcode-gateway/gateway/internal/email"
 	"github.com/Cloud-SPE/livepeer-modules-transcode-gateway/gateway/internal/metrics"
 	"github.com/Cloud-SPE/livepeer-modules-transcode-gateway/gateway/internal/proxy/livepeer"
+	"github.com/Cloud-SPE/livepeer-modules-transcode-gateway/gateway/internal/proxy/loc"
 	"github.com/Cloud-SPE/livepeer-modules-transcode-gateway/gateway/internal/proxy/service"
 	"github.com/Cloud-SPE/livepeer-modules-transcode-gateway/gateway/internal/registry"
 	"github.com/Cloud-SPE/livepeer-modules-transcode-gateway/gateway/internal/repo"
@@ -25,6 +26,15 @@ import (
 	"github.com/Cloud-SPE/livepeer-modules-transcode-gateway/gateway/internal/s3"
 	"github.com/Cloud-SPE/livepeer-modules-transcode-gateway/gateway/internal/server"
 )
+
+// Build-time identity sent to LOC on every request (trust scoring).
+// version/gitSHA are overridable via -ldflags "-X main.version=… -X main.gitSHA=…".
+var (
+	version = "0.1.0"
+	gitSHA  = "dev"
+)
+
+var sdkIdentity = "transcode-gateway/" + version + "/" + gitSHA
 
 func main() {
 	if err := run(); err != nil {
@@ -81,15 +91,18 @@ func run() error {
 		}
 	}
 
-	// gRPC clients (best-effort dial)
+	// gRPC clients (best-effort dial) — live path only; ABR runs on LOC.
 	payer, err := livepeer.DialPayer(ctx, cfg.PayerSocket)
 	if err != nil {
-		log.Warn("payer dial failed (gateway will return 503 on /v1/abr|/v1/live)", "err", err)
+		log.Warn("payer dial failed (gateway will return 503 on /v1/live)", "err", err)
 	}
 	resolver, err := service.DialResolver(ctx, cfg.ResolverSocket)
 	if err != nil {
-		log.Warn("resolver dial failed (gateway will return 503 on /v1/abr|/v1/live)", "err", err)
+		log.Warn("resolver dial failed (gateway will return 503 on /v1/live)", "err", err)
 	}
+
+	// LOC client (jobs API). Nil when LOC_API_KEY is unset — /v1/abr 503s.
+	locClient := loc.NewClient(cfg.LOCBaseURL, cfg.LOCAPIKey, sdkIdentity, 30*time.Second)
 
 	// Metrics
 	met := metrics.New()
@@ -115,7 +128,7 @@ func run() error {
 		S3:       s3c,
 		Payer:    payer,
 		Resolver: resolver,
-		Health:   service.NewHealth(2, 30*time.Second),
+		LOC:      locClient,
 		HTTP:     livepeer.NewHTTPClient(30 * time.Second),
 		CapMap:   livepeer.NewDefault(cfg.ABRCapability, cfg.LiveCapability),
 		Metrics:  met,
@@ -126,6 +139,11 @@ func run() error {
 	// when LIVE_RECONCILE_INTERVAL_SECS=0.
 	liveReconciler := server.NewLiveReconciler(deps)
 	go liveReconciler.Run(ctx)
+
+	// Settle janitor: re-drives LOC settles stuck in 'pending' so
+	// encumbered credit is released after crashes / settle failures.
+	settleJanitor := server.NewSettleJanitor(deps)
+	go settleJanitor.Run(ctx)
 
 	// RTMP server for live-session-gateway-ingest@v0. Bound only when
 	// LIVE_RTMP_PORT > 0 (plan 0003). Disabled by default until upstream

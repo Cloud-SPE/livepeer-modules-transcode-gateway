@@ -1,17 +1,16 @@
 import { LitElement, html } from 'lit';
 import { api } from '../lib/api.js';
 
-// Four-panel registry diagnostic:
+// Three-panel registry diagnostic:
 //   1. Summary       — cache freshness + capability filter + counts
 //   2. Live candidates — straight from the resolver (uncached, real-time)
-//   3. Route health  — in-memory failure tracker (process-local)
-//   4. Cached catalog — what /v1/capabilities returns
+//   3. Cached catalog — what /v1/capabilities returns
+// (Route health died with the LOC migration — LOC owns route selection.)
 
 class CcRegistry extends LitElement {
   static properties = {
     summary:     { state: true },
     candidates:  { state: true },
-    health:      { state: true },
     capabilities:{ state: true },
     capFilter:   { state: true },
     error:       { state: true },
@@ -21,7 +20,6 @@ class CcRegistry extends LitElement {
     super();
     this.summary = null;
     this.candidates = null;
-    this.health = null;
     this.capabilities = null;
     this.capFilter = '';
     this.error = '';
@@ -36,13 +34,11 @@ class CcRegistry extends LitElement {
 
   async #load() {
     try {
-      const [s, h, c] = await Promise.all([
+      const [s, c] = await Promise.all([
         api('/admin/registry/summary'),
-        api('/admin/registry/health'),
         api('/admin/capabilities'),
       ]);
       this.summary = s;
-      this.health = h;
       this.capabilities = c;
       // Live candidates default to the first capability we know about.
       const firstCap = s?.by_capability?.[0]?.capability || this.capabilities?.items?.[0]?.capability || '';
@@ -68,7 +64,6 @@ class CcRegistry extends LitElement {
     return html`
       ${this.#renderSummary()}
       ${this.#renderCandidates()}
-      ${this.#renderRouteHealth()}
       ${this.#renderCachedCatalog()}
       ${this.error ? html`<p class="msg error">${this.error}</p>` : ''}
     `;
@@ -157,37 +152,6 @@ class CcRegistry extends LitElement {
                   )}
                 </tbody>
               </table>`}
-      </div>
-    `;
-  }
-
-  #renderRouteHealth() {
-    const h = this.health;
-    if (!h) return '';
-    return html`
-      <div class="card">
-        <h2>Route health (in-memory)</h2>
-        <p class="msg">
-          Per-candidate failure state. After <code>${h.failure_threshold}</code>
-          consecutive failures a candidate cools off for
-          <code>${h.cooldown_seconds}s</code>.
-        </p>
-        ${(h.items?.length ?? 0) === 0
-          ? html`<p class="msg ok">All routes healthy.</p>`
-          : html`<table>
-              <thead><tr><th>Candidate</th><th>Failures</th><th>Cooldown until</th></tr></thead>
-              <tbody>
-                ${h.items.map(
-                  (e) => html`<tr>
-                    <td><code>${e.key}</code></td>
-                    <td>${e.consec_failures}</td>
-                    <td>${e.cooling_down
-                      ? html`<span class="pill warn">${new Date(e.cooldown_until).toLocaleTimeString()}</span>`
-                      : html`<span class="msg">—</span>`}</td>
-                  </tr>`,
-                )}
-              </tbody>
-            </table>`}
       </div>
     `;
   }

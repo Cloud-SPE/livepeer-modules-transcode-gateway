@@ -2,29 +2,51 @@
 
 How `Livepeer-Payment` envelopes get minted for `/api/v1/*` requests.
 
-## VOD (single-attempt)
+> **Migration status:** ABR (VOD) runs on the **LOC** (Livepeer Open
+> Clearinghouse) jobs API as of PR-1. Live still mints via the local
+> payer-daemon + resolver pair and moves to LOC sessions in PR-3.
+
+## VOD (LOC jobs)
+
+LOC owns route selection and payment minting. The gateway asks LOC for
+a job, makes the broker call itself with the returned envelope, then
+settles actual work units back to LOC. LOC encumbers the worst-case
+credit at create and refunds `funded − billed` at settle.
 
 ```
 client → POST /api/v1/abr
-  gateway opens usage_reservations
-  gateway calls Resolver.SelectMany(capability=livepeer:transcode/abr-ladder)
-  for each candidate (loop):
-    gateway calls PayerDaemon.CreatePayment(face_value, recipient, capability, offering)
-    gateway POSTs to broker with Livepeer-Payment header
-    if 2xx → commit reservation, return job descriptor
-    if 5xx/timeout → mark broker unhealthy, try next candidate, mint a NEW payment
+  gateway opens usage_reservations (settle_state='none')
+  gateway calls LOC POST /v1/jobs {capability, offering, estimated_units}
+    → {job_id, work_id, broker_url, payment_envelope, funded/expected wei}
+  gateway records loc_job_id on the reservation (settle_state='pending')
+  gateway POSTs to broker_url/v1/cap with Livepeer-Payment header
+  if 2xx → commit reservation,
+           LOC POST /v1/jobs/{id}/settle {actual_units=estimate}  (settle_state='settled')
+           return job descriptor
+  if INVALID_RECIPIENT_RAND → settle(0) to release credit, create a
+           fresh LOC job (fresh envelope, possibly fresh broker), retry once
+  if other failure → settle(0) (settle_state='refunded'), refund reservation, 502
 ```
 
-A single client request can mint multiple envelopes if failover
-happens. Each envelope is a real on-chain commitment — the payer
-daemon has signed and recorded it.
+Notes:
 
-`face_value` is derived from the candidate's `price_per_work_unit_wei`
-× `estimated_work_units`. For ABR ladder, we estimate work units from
-input duration × output ladder size (rough; refined when the runner
-reports actual work).
+- **Settles use the estimate** (`estimated_input_seconds × 600`): the
+  runner webhook reports completion, not unit counts, so waiting
+  wouldn't improve accuracy — and settling promptly releases LOC's
+  worst-case encumbrance.
+- **Every LOC job must be settled.** The settle janitor
+  (`internal/server/settle_janitor.go`, `SETTLE_JANITOR_INTERVAL_SECS`)
+  re-drives rows stuck in `settle_state='pending'` (settle-call
+  failures, crashes between dispatch and settle). A 409
+  `job_already_settled` is treated as success.
+- **No multi-candidate failover in the gateway.** LOC picks the route;
+  on broker failure the recovery is settle(0) + a fresh create. (The
+  old candidate-walk dispatcher and its route-health cooldowns were
+  deleted in PR-1.)
+- **No idempotency keys** on LOC creates — the gateway never blindly
+  retries a create after an ambiguous timeout (double-encumbrance risk).
 
-## Live (session-bound)
+## Live (session-bound, legacy daemons until PR-3)
 
 ```
 client → POST /api/v1/live
@@ -56,25 +78,29 @@ responsibility.
 
 | File | Role |
 |---|---|
-| `gateway/internal/proxy/livepeer/payment.go` | gRPC client to `payment-daemon`; `MintEnvelope(...)` is the only callsite. |
-| `gateway/internal/proxy/abr.go` | Calls `MintEnvelope` per attempt; loops failover candidates. |
-| `gateway/internal/proxy/live.go` | Calls `MintEnvelope` once on session-open; relies on broker-side interim debits. |
+| `gateway/internal/proxy/loc/` | HTTP client to LOC: `CreateJob` / `SettleJob` (+ sessions for PR-3); error matchers; settle retry policy. |
+| `gateway/internal/server/handlers_v1.go` | ABR create→dispatch→settle loop incl. rotation retry; `settleLOCJob` helper. |
+| `gateway/internal/server/settle_janitor.go` | Re-drives stuck `settle_state='pending'` rows. |
+| `gateway/internal/proxy/livepeer/payment.go` | (live only, until PR-3) gRPC client to `payment-daemon`. |
 | `gateway/internal/proxy/livepeer/headers.go` | Attaches the envelope to outbound broker requests as `Livepeer-Payment`. |
 
-## Failure semantics
+## Failure semantics (ABR / LOC)
 
-- **Payer daemon unreachable** → 500, reservation refunded, no broker
-  call.
-- **`face_value` too small** → broker rejects with 402; gateway
-  surfaces the error and refunds.
-- **Mid-attempt RPC failure** → log the failure with the work_id;
-  the reservation stays in `open` until the next sweep refunds it.
-- **Live session balance exhaustion** → broker closes the RTMP;
-  `live_streams.status='ended'`, `usage_reservations.state='committed'`
-  with whatever work units accrued.
+- **LOC unreachable or LOC_API_KEY unset** → 503 `loc_unavailable`, no
+  reservation opened / refunded.
+- **`NO_ROUTE_AVAILABLE`** → 502 `no_capable_broker`, reservation refunded.
+- **`INSUFFICIENT_CREDIT` / spend-cap** → 402 `insufficient_credit`;
+  the operator-granted LOC credit pool needs a topup.
+- **Broker 402 (face value too small)** → settle(0), refund, 502.
+- **Crash between create and settle** → reservation stays
+  `settle_state='pending'`; janitor settles (estimate if committed,
+  0 + refund if still open) on its next tick.
 
 ## What this doc does not cover
 
+- LOC's internal ledger / EV-charging model — see the basic-pymnthouse
+  repo's DESIGN.md.
 - The ticket math itself — see go-livepeer's `pm` package and the
   `payee_daemon.proto` types.
-- Operator-side keystore funding — see [`../../DEPLOYMENT.md`](../../DEPLOYMENT.md).
+- Operator-side keystore funding (live path only until PR-3) — see
+  [`../../DEPLOYMENT.md`](../../DEPLOYMENT.md).

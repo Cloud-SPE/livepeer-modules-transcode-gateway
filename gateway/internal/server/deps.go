@@ -7,6 +7,7 @@ import (
 	"github.com/Cloud-SPE/livepeer-modules-transcode-gateway/gateway/internal/email"
 	"github.com/Cloud-SPE/livepeer-modules-transcode-gateway/gateway/internal/metrics"
 	"github.com/Cloud-SPE/livepeer-modules-transcode-gateway/gateway/internal/proxy/livepeer"
+	"github.com/Cloud-SPE/livepeer-modules-transcode-gateway/gateway/internal/proxy/loc"
 	"github.com/Cloud-SPE/livepeer-modules-transcode-gateway/gateway/internal/proxy/service"
 	"github.com/Cloud-SPE/livepeer-modules-transcode-gateway/gateway/internal/repo"
 	"github.com/Cloud-SPE/livepeer-modules-transcode-gateway/gateway/internal/s3"
@@ -28,9 +29,12 @@ type Deps struct {
 	Caps     *repo.CapabilityRepo
 	Email    *email.Mailer
 	S3       *s3.Client
+	// Payer/Resolver are the legacy UDS daemon clients — still used by
+	// the live path until it moves to LOC sessions (PR-3). ABR runs on
+	// LOC as of PR-1.
 	Payer    *livepeer.PayerClient
 	Resolver *service.RouteSelector
-	Health   *service.Health
+	LOC      *loc.Client
 	HTTP     *livepeer.HTTPClient
 	CapMap   livepeer.CapabilityMap
 	Metrics  *metrics.Registry

@@ -48,6 +48,16 @@ type Config struct {
 	RefreshMS      int           `env:"REGISTRY_REFRESH_INTERVAL_MS" envDefault:"60000"`
 	RefreshInterval time.Duration // derived
 
+	// LOC (Livepeer Open Clearinghouse) — mints payment envelopes and
+	// owns route selection for ABR jobs (PR-1; live + catalog follow).
+	// LOCAPIKey is the operator-issued pymth_ key; unset → /v1/abr 503s.
+	LOCBaseURL string `env:"LOC_BASE_URL" envDefault:"https://loc.cloudspe.com"`
+	LOCAPIKey  string `env:"LOC_API_KEY"`
+	// SettleJanitorIntervalSecs drives the background loop that re-drives
+	// LOC settles stuck in 'pending' (releases encumbered credit after
+	// crashes / settle-call failures). 0 disables.
+	SettleJanitorIntervalSecs int `env:"SETTLE_JANITOR_INTERVAL_SECS" envDefault:"60"`
+
 	ABRCapability  string `env:"ABR_CAPABILITY" envDefault:"video:transcode.abr"`
 	// LiveCapability is the on-chain capability id for live transcode.
 	// Orchs advertise it with offering = LiveGatewayIngestOffering for the
@@ -107,6 +117,9 @@ func (c Config) Warnings() []string {
 	}
 	if c.S3AccessKeyID == "" || c.S3SecretAccessKey == "" {
 		w = append(w, "S3 credentials unset — /api/v1/abr/upload-url will return 503")
+	}
+	if c.LOCAPIKey == "" {
+		w = append(w, "LOC_API_KEY unset — /api/v1/abr will return 503 loc_unavailable")
 	}
 	return w
 }

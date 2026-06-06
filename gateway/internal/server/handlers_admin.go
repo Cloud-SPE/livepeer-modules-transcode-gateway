@@ -486,32 +486,9 @@ func registerAdminRegistry(api huma.API, deps Deps) {
 		return out, nil
 	})
 
-	huma.Register(api, huma.Operation{
-		OperationID: "admin-registry-health",
-		Method:      http.MethodGet,
-		Path:        "/api/admin/registry/health",
-		Summary:     "In-memory route health (cooldowns + failure counters)",
-		Tags:        []string{"admin"},
-	}, func(ctx context.Context, _ *struct{}) (*AdminRouteHealthOut, error) {
-		out := &AdminRouteHealthOut{}
-		if deps.Health == nil {
-			return out, nil
-		}
-		now := time.Now()
-		snap := deps.Health.Snapshot(now)
-		threshold, cooldown := deps.Health.Thresholds()
-		out.Body.FailureThreshold = threshold
-		out.Body.CooldownSeconds = int(cooldown.Seconds())
-		for _, e := range snap {
-			out.Body.Items = append(out.Body.Items, AdminRouteHealthEntry{
-				Key:            e.Key,
-				ConsecFailures: e.ConsecFailures,
-				CoolingDown:    e.CoolingDown,
-				CooldownUntil:  e.CooldownUntil,
-			})
-		}
-		return out, nil
-	})
+	// Route-health endpoint removed in PR-1 of the LOC migration: the
+	// gateway no longer walks broker candidates for ABR (LOC owns route
+	// selection), so the in-memory cooldown tracker died with it.
 }
 
 // ── output types ────────────────────────────────────────────────────
@@ -671,21 +648,6 @@ type AdminRegistryCandidatesOut struct {
 		Capability string                   `json:"capability"`
 		Offering   string                   `json:"offering"`
 		Items      []AdminRegistryCandidate `json:"items"`
-	}
-}
-
-type AdminRouteHealthEntry struct {
-	Key            string    `json:"key"`
-	ConsecFailures int       `json:"consec_failures"`
-	CoolingDown    bool      `json:"cooling_down"`
-	CooldownUntil  time.Time `json:"cooldown_until"`
-}
-
-type AdminRouteHealthOut struct {
-	Body struct {
-		FailureThreshold int                      `json:"failure_threshold"`
-		CooldownSeconds  int                      `json:"cooldown_seconds"`
-		Items            []AdminRouteHealthEntry  `json:"items"`
 	}
 }
 

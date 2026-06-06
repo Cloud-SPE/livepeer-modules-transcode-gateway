@@ -264,7 +264,10 @@ func (r *LiveReconciler) executeTopUp(ctx context.Context, live *repo.LiveStream
 						c.Capability, c.Offering, requestID, re.PaymentBytes,
 						livepeer.LiveTopUpRequest{GatewaySessionID: live.ID},
 					)
-					r.deps.Metrics.SessionRotationRetries.WithLabelValues(c.Capability, service.RotationOutcomeSucceeded).Inc()
+					// Plain "succeeded" label — the dispatcher's outcome
+					// constants died with route_dispatch.go (PR-1); this
+					// whole path moves to LOC RefillSession in PR-3.
+					r.deps.Metrics.SessionRotationRetries.WithLabelValues(c.Capability, "succeeded").Inc()
 				}
 			}
 		}
