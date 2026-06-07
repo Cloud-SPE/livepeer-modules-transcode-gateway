@@ -43,10 +43,18 @@ type Config struct {
 	S3SecretAccessKey string `env:"S3_SECRET_ACCESS_KEY"`
 	S3PresignTTLSecs  int    `env:"S3_PRESIGN_TTL_SECONDS" envDefault:"3600"`
 
-	PayerSocket    string        `env:"LIVEPEER_PAYER_DAEMON_SOCKET" envDefault:"/var/run/livepeer/payer-daemon.sock"`
-	ResolverSocket string        `env:"LIVEPEER_RESOLVER_SOCKET" envDefault:"/var/run/livepeer/service-registry.sock"`
 	RefreshMS      int           `env:"REGISTRY_REFRESH_INTERVAL_MS" envDefault:"60000"`
 	RefreshInterval time.Duration // derived
+
+	// LOC (Livepeer Open Clearinghouse) — mints payment envelopes and
+	// owns route selection for ABR jobs (PR-1; live + catalog follow).
+	// LOCAPIKey is the operator-issued pymth_ key; unset → /v1/abr 503s.
+	LOCBaseURL string `env:"LOC_BASE_URL" envDefault:"https://loc.cloudspe.com"`
+	LOCAPIKey  string `env:"LOC_API_KEY"`
+	// SettleJanitorIntervalSecs drives the background loop that re-drives
+	// LOC settles stuck in 'pending' (releases encumbered credit after
+	// crashes / settle-call failures). 0 disables.
+	SettleJanitorIntervalSecs int `env:"SETTLE_JANITOR_INTERVAL_SECS" envDefault:"60"`
 
 	ABRCapability  string `env:"ABR_CAPABILITY" envDefault:"video:transcode.abr"`
 	// LiveCapability is the on-chain capability id for live transcode.
@@ -66,6 +74,10 @@ type Config struct {
 	LiveReconcileIntervalSecs  int `env:"LIVE_RECONCILE_INTERVAL_SECS" envDefault:"30"`
 	LiveTopupRunwayThresholdSecs int `env:"LIVE_TOPUP_RUNWAY_THRESHOLD_SECS" envDefault:"60"`
 	LiveTopupFundSecs          int `env:"LIVE_TOPUP_FUND_SECS" envDefault:"60"`
+	// LiveMaxTotalUnits caps a LOC live session's lifetime spend (LOC
+	// encumbers toward this ceiling and refuses refills beyond it). At
+	// ~1000 units/sec of output the default funds ~100 minutes.
+	LiveMaxTotalUnits int64 `env:"LIVE_MAX_TOTAL_UNITS" envDefault:"6000000"`
 
 	// live-session-gateway-ingest@v0 (plan 0003). When LiveRTMPPort > 0
 	// the gateway runs an RTMP server on that port and accepts ingest
@@ -107,6 +119,9 @@ func (c Config) Warnings() []string {
 	}
 	if c.S3AccessKeyID == "" || c.S3SecretAccessKey == "" {
 		w = append(w, "S3 credentials unset — /api/v1/abr/upload-url will return 503")
+	}
+	if c.LOCAPIKey == "" {
+		w = append(w, "LOC_API_KEY unset — /api/v1/abr and /api/v1/live will return 503 loc_unavailable")
 	}
 	return w
 }

@@ -38,6 +38,8 @@ func (r *ReservationRepo) Open(ctx context.Context, in OpenInput) (*UsageReserva
 		          latency_ms, status_code, error_text, runner_job_id,
 		          webhook_secret, runner_status, runner_phase, runner_progress,
 		          runner_error_code, runner_error_text, runner_state_json, runner_completed_at,
+		          loc_job_id, loc_work_id, funded_value_wei, expected_value_wei,
+		          billed_value_wei, settled_at, settle_state,
 		          created_at, resolved_at`
 	row := r.pool.QueryRow(ctx, q, in.APIKeyID, in.WorkID, in.Capability, in.Offering,
 		in.EstimatedWorkUnits, stringifyBig(in.PricePerWorkUnitWei))
@@ -76,6 +78,8 @@ func (r *ReservationRepo) GetByWorkID(ctx context.Context, workID uuid.UUID) (*U
 	                  latency_ms, status_code, error_text, runner_job_id,
 	                  webhook_secret, runner_status, runner_phase, runner_progress,
 	                  runner_error_code, runner_error_text, runner_state_json, runner_completed_at,
+		          loc_job_id, loc_work_id, funded_value_wei, expected_value_wei,
+		          billed_value_wei, settled_at, settle_state,
 	                  created_at, resolved_at
 	           FROM usage_reservations WHERE work_id=$1`
 	row := r.pool.QueryRow(ctx, q, workID)
@@ -92,6 +96,8 @@ func (r *ReservationRepo) GetByID(ctx context.Context, id uuid.UUID) (*UsageRese
 	                  latency_ms, status_code, error_text, runner_job_id,
 	                  webhook_secret, runner_status, runner_phase, runner_progress,
 	                  runner_error_code, runner_error_text, runner_state_json, runner_completed_at,
+		          loc_job_id, loc_work_id, funded_value_wei, expected_value_wei,
+		          billed_value_wei, settled_at, settle_state,
 	                  created_at, resolved_at
 	           FROM usage_reservations WHERE id=$1`
 	row := r.pool.QueryRow(ctx, q, id)
@@ -108,6 +114,8 @@ func (r *ReservationRepo) ListByAPIKey(ctx context.Context, apiKeyID uuid.UUID, 
 	                  latency_ms, status_code, error_text, runner_job_id,
 	                  webhook_secret, runner_status, runner_phase, runner_progress,
 	                  runner_error_code, runner_error_text, runner_state_json, runner_completed_at,
+		          loc_job_id, loc_work_id, funded_value_wei, expected_value_wei,
+		          billed_value_wei, settled_at, settle_state,
 	                  created_at, resolved_at
 	           FROM usage_reservations
 	           WHERE api_key_id=$1 AND created_at >= $2
@@ -219,6 +227,8 @@ func (r *ReservationRepo) ListByCapability(ctx context.Context, capability strin
 	                  latency_ms, status_code, error_text, runner_job_id,
 	                  webhook_secret, runner_status, runner_phase, runner_progress,
 	                  runner_error_code, runner_error_text, runner_state_json, runner_completed_at,
+		          loc_job_id, loc_work_id, funded_value_wei, expected_value_wei,
+		          billed_value_wei, settled_at, settle_state,
 	                  created_at, resolved_at
 	           FROM usage_reservations
 	           WHERE capability = $1 AND created_at >= $2
@@ -345,6 +355,8 @@ func (r *ReservationRepo) LookupByRunnerJobID(ctx context.Context, runnerJobID s
 	                  latency_ms, status_code, error_text, runner_job_id,
 	                  webhook_secret, runner_status, runner_phase, runner_progress,
 	                  runner_error_code, runner_error_text, runner_state_json, runner_completed_at,
+		          loc_job_id, loc_work_id, funded_value_wei, expected_value_wei,
+		          billed_value_wei, settled_at, settle_state,
 	                  created_at, resolved_at
 	           FROM usage_reservations WHERE runner_job_id = $1`
 	res, err := scanReservation(r.pool.QueryRow(ctx, q, runnerJobID))
@@ -364,27 +376,101 @@ func (r *ReservationRepo) SetRunnerJobID(ctx context.Context, workID uuid.UUID, 
 	return err
 }
 
+// SetLOCJob links a reservation to the LOC job that funded it and marks
+// it pending-settle. Called immediately after LOC CreateJob succeeds —
+// every LOC job MUST eventually be settled (the settle janitor retries
+// rows stuck in 'pending').
+func (r *ReservationRepo) SetLOCJob(ctx context.Context, workID uuid.UUID,
+	locJobID uuid.UUID, locWorkID string, funded, expected *big.Int) error {
+	const q = `UPDATE usage_reservations
+	           SET loc_job_id=$2, loc_work_id=$3, funded_value_wei=$4,
+	               expected_value_wei=$5, settle_state='pending'
+	           WHERE work_id=$1`
+	_, err := r.pool.Exec(ctx, q, workID, locJobID, locWorkID,
+		stringifyBig(funded), stringifyBig(expected))
+	return err
+}
+
+// MarkSettled finalizes the LOC settle lifecycle for a reservation.
+// state ∈ settled | refunded | failed. billed may be nil when the
+// settle response wasn't available (e.g. terminal failure).
+func (r *ReservationRepo) MarkSettled(ctx context.Context, id uuid.UUID,
+	billed *big.Int, state SettleState) error {
+	const q = `UPDATE usage_reservations
+	           SET settle_state=$3, billed_value_wei=COALESCE($2, billed_value_wei),
+	               settled_at=now()
+	           WHERE id=$1`
+	_, err := r.pool.Exec(ctx, q, id, stringifyBig(billed), string(state))
+	return err
+}
+
+// ListPendingSettle returns reservations whose LOC job hasn't been
+// settled yet and that are older than the grace cutoff — the settle
+// janitor's work queue. Ordered oldest-first so stuck rows drain in
+// creation order.
+func (r *ReservationRepo) ListPendingSettle(ctx context.Context, olderThan time.Time, limit int) ([]UsageReservation, error) {
+	if limit <= 0 {
+		limit = 200
+	}
+	const q = `SELECT id, api_key_id, work_id, capability, offering, broker_url, eth_address,
+	                  state, estimated_work_units, committed_work_units, price_per_work_unit_wei,
+	                  latency_ms, status_code, error_text, runner_job_id,
+	                  webhook_secret, runner_status, runner_phase, runner_progress,
+	                  runner_error_code, runner_error_text, runner_state_json, runner_completed_at,
+	                  loc_job_id, loc_work_id, funded_value_wei, expected_value_wei,
+	                  billed_value_wei, settled_at, settle_state,
+	                  created_at, resolved_at
+	           FROM usage_reservations
+	           WHERE settle_state = 'pending' AND created_at < $1
+	           ORDER BY created_at ASC LIMIT $2`
+	rows, err := r.pool.Query(ctx, q, olderThan, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []UsageReservation
+	for rows.Next() {
+		res, err := scanReservation(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *res)
+	}
+	return out, rows.Err()
+}
+
 func scanReservation(s pgx.Row) (*UsageReservation, error) {
 	var r UsageReservation
-	var state string
-	var price *string
+	var state, settleState string
+	var price, funded, expected, billed *string
 	err := s.Scan(&r.ID, &r.APIKeyID, &r.WorkID, &r.Capability, &r.Offering,
 		&r.BrokerURL, &r.EthAddress, &state, &r.EstimatedWorkUnits, &r.CommittedWorkUnits,
 		&price, &r.LatencyMs, &r.StatusCode, &r.ErrorText, &r.RunnerJobID,
 		&r.WebhookSecret, &r.RunnerStatus, &r.RunnerPhase, &r.RunnerProgress,
 		&r.RunnerErrorCode, &r.RunnerErrorText, &r.RunnerStateJSON, &r.RunnerCompletedAt,
+		&r.LOCJobID, &r.LOCWorkID, &funded, &expected, &billed, &r.SettledAt, &settleState,
 		&r.CreatedAt, &r.ResolvedAt)
 	if err != nil {
 		return nil, err
 	}
 	r.State = ReservationState(state)
-	if price != nil && *price != "" {
-		b := new(big.Int)
-		if _, ok := b.SetString(*price, 10); ok {
-			r.PricePerWorkUnitWei = b
-		}
-	}
+	r.SettleState = SettleState(settleState)
+	r.PricePerWorkUnitWei = parseBig(price)
+	r.FundedValueWei = parseBig(funded)
+	r.ExpectedValueWei = parseBig(expected)
+	r.BilledValueWei = parseBig(billed)
 	return &r, nil
+}
+
+func parseBig(s *string) *big.Int {
+	if s == nil || *s == "" {
+		return nil
+	}
+	b := new(big.Int)
+	if _, ok := b.SetString(*s, 10); !ok {
+		return nil
+	}
+	return b
 }
 
 func stringifyBig(b *big.Int) any {

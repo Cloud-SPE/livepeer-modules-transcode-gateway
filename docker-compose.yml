@@ -9,10 +9,10 @@
 #                          embedded SPAs at /, /portal/, /admin/, /health,
 #                          /metrics on one port, plus RTMP on :1935)
 #
-# The two Livepeer daemons live behind the `livepeer` profile. The
-# gateway boots fine without them (`/api/v1/*` returns 503 until they're
-# reachable). Bring them up with:
-#   docker compose --profile livepeer up -d
+# Payments + route selection are handled by LOC (the Livepeer Open
+# Clearinghouse) over HTTPS — set LOC_API_KEY in .env. No local Livepeer
+# daemons or keystore are required; `/api/v1/*` returns 503 until
+# LOC_API_KEY is set.
 #
 # Capability workers (abr-runner, transcode-runner, capability-broker)
 # are external to this repository. The gateway expects on-chain
@@ -147,9 +147,10 @@ services:
       S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-video-gateway-dev-secret}
       S3_PRESIGN_TTL_SECONDS: ${S3_PRESIGN_TTL_SECONDS:-3600}
 
-      # ── Livepeer plumbing ──
-      LIVEPEER_PAYER_DAEMON_SOCKET: /var/run/livepeer/payer-daemon.sock
-      LIVEPEER_RESOLVER_SOCKET: ${LIVEPEER_RESOLVER_SOCKET:-/var/run/livepeer/service-registry.sock}
+      # ── LOC (Livepeer Open Clearinghouse) — payments + routing ──
+      LOC_BASE_URL: ${LOC_BASE_URL:-https://loc.cloudspe.com}
+      LOC_API_KEY: ${LOC_API_KEY:-}
+      SETTLE_JANITOR_INTERVAL_SECS: ${SETTLE_JANITOR_INTERVAL_SECS:-60}
       REGISTRY_REFRESH_INTERVAL_MS: ${REGISTRY_REFRESH_INTERVAL_MS:-60000}
       ABR_CAPABILITY: ${ABR_CAPABILITY:-video:transcode.abr}
       LIVE_CAPABILITY: ${LIVE_CAPABILITY:-video:transcode.live}
@@ -166,6 +167,8 @@ services:
       LIVE_RECONCILE_INTERVAL_SECS: ${LIVE_RECONCILE_INTERVAL_SECS:-30}
       LIVE_TOPUP_RUNWAY_THRESHOLD_SECS: ${LIVE_TOPUP_RUNWAY_THRESHOLD_SECS:-60}
       LIVE_TOPUP_FUND_SECS: ${LIVE_TOPUP_FUND_SECS:-60}
+      # LOC session lifetime spend ceiling (~1000 units/sec of output).
+      LIVE_MAX_TOTAL_UNITS: ${LIVE_MAX_TOTAL_UNITS:-6000000}
 
       # ── live-session-gateway-ingest@v0 (plan 0003) ──
       # Gateway-owned RTMP ingest. Set LIVE_RTMP_PORT to a non-zero
@@ -177,8 +180,6 @@ services:
       # ── /api/v1/* rate limit ──
       V1_RATE_LIMIT_PER_MINUTE: ${V1_RATE_LIMIT_PER_MINUTE:-60}
       V1_RATE_LIMIT_BURST: ${V1_RATE_LIMIT_BURST:-30}
-    volumes:
-      - livepeer-run:/var/run/livepeer
     ports:
       - "${GATEWAY_HOST_PORT:-4000}:4000"
       # RTMP ingest port for live-session-gateway-ingest@v0 (plan 0003).
@@ -189,60 +190,7 @@ services:
       - "${LIVE_RTMP_HOST_PORT:-1935}:${LIVE_RTMP_PORT:-1935}"
     restart: unless-stopped
 
-  service-registry-daemon:
-    image: tztcloud/livepeer-service-registry-daemon:${LIVEPEER_REGISTRY_DAEMON_TAG:-v1.3.1}
-    container_name: video-gateway-resolver
-    profiles: [livepeer]
-    restart: unless-stopped
-    environment:
-      CHAIN_RPC: ${CHAIN_RPC:-}
-      CHAIN_ID: ${CHAIN_ID:-42161}
-      LIVEPEER_RESOLVER_SOCKET: /var/run/livepeer/service-registry.sock
-    command:
-      - --mode=resolver
-      - --socket=/var/run/livepeer/service-registry.sock
-      - --store-path=/var/lib/livepeer/registry-cache.db
-      - --chain-rpc=${CHAIN_RPC:-}
-      - --chain-id=${CHAIN_ID:-42161}
-      - --controller-address=${CONTROLLER_ADDRESS:-0xD8E8328501E9645d16Cf49539efC04f734606ee4}
-      - --ai-service-registry-address=${AI_SERVICE_REGISTRY_ADDRESS:-}
-      - --discovery=chain
-      - --round-poll-interval=${ROUND_POLL_INTERVAL:-120s}
-      - --cache-manifest-ttl=${CACHE_MANIFEST_TTL:-5m}
-      - --manifest-max-bytes=${MANIFEST_MAX_BYTES:-1048576}
-      - --manifest-fetch-timeout=${MANIFEST_FETCH_TIMEOUT:-5s}
-      - --max-stale=${MAX_STALE:-30m}
-      - --reject-unsigned=true
-      - --log-level=${REGISTRY_LOG_LEVEL:-info}
-      - --log-format=${REGISTRY_LOG_FORMAT:-json}
-      - --metrics-listen=:${REGISTRY_METRICS_PORT:-9095}
-    volumes:
-      - livepeer-run:/var/run/livepeer
-      - video-gateway-registry-cache:/var/lib/livepeer
-
-  payer-daemon:
-    image: tztcloud/livepeer-payment-daemon:${LIVEPEER_PAYER_DAEMON_TAG:-v1.3.1}
-    container_name: video-gateway-payer
-    profiles: [livepeer]
-    restart: unless-stopped
-    environment:
-      CHAIN_RPC: ${CHAIN_RPC:-}
-      CHAIN_ID: ${CHAIN_ID:-42161}
-      LIVEPEER_PAYER_SOCKET: /var/run/livepeer/payer-daemon.sock
-      LIVEPEER_PAYER_KEYSTORE_PATH: /etc/livepeer/keystore.json
-      LIVEPEER_PAYER_KEYSTORE_PASSWORD_FILE: /etc/livepeer/keystore-password
-    command:
-      - --mode=sender
-      - --socket=/var/run/livepeer/payer-daemon.sock
-      - --chain-rpc=${CHAIN_RPC:-}
-      - --keystore-path=/etc/livepeer/keystore.json
-      - --keystore-password-file=/etc/livepeer/keystore-password
-    volumes:
-      - livepeer-run:/var/run/livepeer
-      - ${LIVEPEER_KEYSTORE_DIR:-./.dev/keystore}:/etc/livepeer:ro
 
 volumes:
   video-gateway-pgdata:
   video-gateway-minio-data:
-  video-gateway-registry-cache:
-  livepeer-run:

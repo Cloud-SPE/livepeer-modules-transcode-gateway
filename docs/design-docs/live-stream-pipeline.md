@@ -58,16 +58,18 @@ POST /api/v1/live
    stores its peppered hash in `live_streams.stream_key_hash`, opens a
    long-lived `usage_reservations` row (state=`open`), and creates the
    `live_streams` row (status=`provisioning`).
-2. **Route selection.** `Resolver.SelectMany(capability=
-   'video:transcode.live', offering='gateway-ingest')` returns ranked
-   candidates. Pick the top one (no failover on session-open).
+2. **LOC session open.** `LOC.OpenSession(capability=
+   'video:transcode.live', offering='gateway-ingest',
+   estimated_runway_units=60000, max_total_units=LIVE_MAX_TOTAL_UNITS)`
+   — LOC selects the broker AND mints the initial payment envelope in
+   one call (no failover on session-open).
 3. **Mint STS credentials.** `s3.MintLiveSessionCredentials(...)` calls
    MinIO STS `AssumeRole` with an inline policy scoped to
    `live-out/<api_key>/<live_id>/*` (PutObject / DeleteObject /
    AbortMultipartUpload only). Lifetime = `LIVE_S3_CREDENTIAL_TTL_HOURS`.
-4. **Mint envelope.** `face_value` sized for the session's initial
-   estimated work units (configurable via ladder size + an internal
-   default).
+4. **Payment envelope.** Comes from the LOC session-open response
+   (step 2); LOC encumbers worst-case credit toward `max_total_units`
+   and refunds `funded − billed` at close.
 5. **Broker OpenSession.** Gateway POSTs to broker `/v1/cap` with
    mode `live-session-gateway-ingest@v0`. Body carries the STS
    credentials (so the runner can write HLS) and the customer's
@@ -85,21 +87,25 @@ POST /api/v1/live
 7. **Runner writes HLS.** Runner re-encodes and PUTs HLS segments +
    manifests directly to MinIO under the scoped prefix. MinIO
    enforces the STS policy server-side.
-8. **Broker drives interim debits.** As work units accrue,
-   `payment-daemon.Debit(session_id, units)` is called. The
+8. **Broker drives interim debits; gateway refills via LOC.** The
    reconciler (`live_reconciler.go`, cadence
    `LIVE_RECONCILE_INTERVAL_SECS`) polls the broker for runner status
    each tick and caches the result in `live_streams.runner_status_json`
-   for the admin UI. Auto-topup mints a new envelope when reported
-   runway falls below `LIVE_TOPUP_RUNWAY_THRESHOLD_SECS`.
+   for the admin UI. When reported runway falls below
+   `LIVE_TOPUP_RUNWAY_THRESHOLD_SECS`, it calls LOC
+   `POST /v1/sessions/{id}/refill` (pinned to the session's broker) and
+   delivers the fresh envelope to the broker's topup endpoint.
+   `cap_status.will_refuse_next_refill` warns one refill ahead of a cap
+   so the stream can wind down gracefully.
 9. **Client polls `GET /api/v1/live/:id`.** Returns
    `{status, playback, started_at, ended_at, ...}`. Polling cadence
    is client-driven (suggested: 5s while provisioning, 30s while live).
-10. **Client DELETEs.** Gateway synchronously closes the customer's
-    RTMP socket + the upstream relay push (`RTMPProbe.CloseSession`)
-    so OBS sees disconnect in ~2s, then calls broker `CloseSession`,
-    settles via payment-daemon, updates `live_streams.status='ended'`
-    and `usage_reservations.state='committed'`.
+10. **Client DELETEs.** Gateway calls broker `/end`, settles the LOC
+    session (`POST /v1/sessions/{id}/close` with a duration-estimate
+    `actual_units`; race-safe vs the reconciler via `loc_closed_at`),
+    updates `live_streams.status='ended'`, and synchronously closes
+    the customer's RTMP socket + the upstream relay push
+    (`RTMPProbe.CloseSession`) so OBS sees disconnect in ~2s.
 
 ## States
 
@@ -126,7 +132,9 @@ v1.
 | Broker rejects session-open | `status='failed'`, reservation refunded, 502 to client. |
 | RTMP push fails authentication | Gateway closes the customer's TCP socket; `live_streams.status` stays `provisioning` until cleanup. |
 | Mid-stream upstream RTMP failure | Gateway closes the customer's TCP socket too; stream ends. Client must allocate a new session. (v1 has no soft failover.) |
-| Balance exhausted | Broker emits `insufficient_balance` close reason; reconciler transitions `status='ended'`. |
+| Balance exhausted | Broker emits `insufficient_balance` close reason; reconciler transitions `status='ended'` and closes the LOC session. |
+| LOC refill refused (cap reached) | Reconciler winds the stream down gracefully: broker end + LOC close + RTMP teardown, close_reason `cap_reached`. |
+| Refill rejected INVALID_RECIPIENT_RAND | Retried once; if still failing the session ends with close_reason `rotation_unrecoverable` (LOC has no rotation-recovery primitive yet — upstream gap). |
 | Client never pushes RTMP | Session stays `provisioning`; janitor task closes it after `LIVE_PROVISIONING_TTL` (TBD; tracked in tech-debt). |
 | Client never DELETEs | Session stays `live` until balance exhausts or operator force-closes. |
 

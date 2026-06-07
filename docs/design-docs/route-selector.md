@@ -1,84 +1,36 @@
-# Route selector
+# Route selection (historical — LOC owns this now)
 
-How the gateway turns "user wants an ABR transcode" into a ranked
-broker list.
+> **Superseded by the LOC migration.** The gateway no longer selects
+> routes: the Livepeer Open Clearinghouse binds route selection to
+> payment minting inside `POST /v1/jobs` (ABR) and `POST /v1/sessions`
+> (live). The in-gateway `RouteSelector` / `Candidate` types, the
+> failover dispatcher (`route_dispatch.go`), and the route-health
+> cooldown tracker (`route_health.go`) were deleted. See
+> [`payment-flow.md`](payment-flow.md) for the current flow.
 
-## Shape
+## What replaced it
 
-```go
-type RouteSelector interface {
-    SelectMany(ctx context.Context, req SelectRequest) ([]Candidate, error)
-}
+| Old concern | Where it lives now |
+|---|---|
+| Ranked candidate list (`SelectMany`) | LOC's registry pass-through; LOC picks the route at job/session create |
+| Per-candidate payment mint | LOC `CreateJob` / `OpenSession` returns broker_url + envelope together |
+| Failover loop over candidates | None in the gateway. Recovery from a broker failure = settle(0) + a fresh LOC create (LOC may pick a different broker) |
+| Route-health cooldowns | Nothing equivalent yet — LOC has no outcome-aware ranking. Tracked as an upstream LOC feature request |
+| Rotation retry (`INVALID_RECIPIENT_RAND`) | Inline in the ABR handler (settle(0) + recreate, once) and the live reconciler (refill retry once, then graceful wind-down) |
 
-type SelectRequest struct {
-    Capability string   // e.g. "livepeer:transcode/abr-ladder"
-    Offering   string   // e.g. "default" or a custom ladder id
-    Tier       string   // optional
-    MinWeight  int32    // optional
-}
+## Known regression (upstream issue to file)
 
-type Candidate struct {
-    WorkerURL          string
-    EthAddress         string
-    Capability         string
-    Offering           string
-    PricePerUnitWei    *big.Int
-    WorkUnit           string
-    Extra              json.RawMessage
-    Constraints        json.RawMessage
-    QuoteID            string
-    QuoteVersion       uint64
-    RouteFingerprint   []byte
-    ConstraintFingerprint []byte
-    UnitsPerPrice      uint64
-}
-```
+The old dispatcher walked a ranked list with health-aware ordering, so
+a flapping broker was skipped within one request. With LOC, a retry may
+be handed the same broker back — LOC's discovery has no feedback loop
+from dispatch outcomes. Proposed upstream fixes: an `exclude_brokers`
+field on create, or outcome-aware ranking in the registry daemon.
 
-## How candidates rank
+## Open questions carried forward
 
-The resolver (`service-registry-daemon`) already orders by weight,
-freshness, and signature status. The gateway accepts that order and
-adds:
-
-- **Route health.** A candidate that's in cooldown (recent 5xx /
-  timeout streak) is deprioritized — pushed to the back of the queue.
-- **Constraint match.** If a request specifies extras the candidate
-  doesn't advertise (e.g. AV1 output when the candidate only does
-  H.264), it's filtered out before the ranking step.
-
-## Failover loop
-
-`gateway/internal/proxy/service/route_dispatch.go` iterates
-candidates:
-
-```
-for cand in candidates:
-    health.beginAttempt(cand)
-    payment = mint(cand)
-    res, err = broker.dispatch(cand, payment, body)
-    if isRetryable(err):
-        health.recordFailure(cand, err)
-        continue
-    return res, err
-return last_err
-```
-
-`isRetryable` returns true for connection errors, 5xx, and 429.
-4xx (other than 429) is returned to the client verbatim.
-
-## Why not just use the first candidate
-
-The resolver's order is *prediction*, not *reality*. A broker can go
-down between a refresh cycle and a request. Failover gives us
-single-digit-percent error rates on top of supply that fluctuates.
-
-## Open questions
-
-- **Live route selection on re-allocation.** `/api/v1/live` does not
-  failover within a session; a future plan should explore whether
-  a "preferred broker" hint can let clients re-allocate against the
-  same orchestrator when ingest drops.
-- **Quote-aware ABR ladder pricing.** Today face value is estimated
-  from input duration. A future plan should let the runner respond
-  with `units_per_price` so subsequent attempts mint exactly the
-  right value.
+- **Live route selection on re-allocation.** `/api/v1/live` still does
+  not failover within a session; a "preferred broker" hint for
+  re-allocation remains future work (now an LOC-side concern).
+- **Quote-aware ABR ladder pricing.** Face value is still estimated
+  from input duration (`estimated_units`); runner-reported actuals
+  would tighten settlement.

@@ -7,11 +7,10 @@ import (
 	"time"
 
 	"github.com/Cloud-SPE/livepeer-modules-transcode-gateway/gateway/internal/proxy/livepeer"
-	"github.com/Cloud-SPE/livepeer-modules-transcode-gateway/gateway/internal/proxy/service"
+	"github.com/Cloud-SPE/livepeer-modules-transcode-gateway/gateway/internal/proxy/loc"
 	"github.com/Cloud-SPE/livepeer-modules-transcode-gateway/gateway/internal/repo"
 
 	"github.com/google/uuid"
-	paymentsv1 "github.com/Cloud-SPE/livepeer-network-modules/livepeer-network-protocol/proto-go/livepeer/payments/v1"
 )
 
 // LiveReconciler is the background loop that polls broker session state
@@ -152,142 +151,119 @@ func (r *LiveReconciler) maybeTopUp(ctx context.Context, live *repo.LiveStream) 
 	r.deps.Metrics.LiveTopupAttempts.WithLabelValues(live.Capability, "succeeded").Inc()
 }
 
-// executeTopUp does the per-envelope mint + broker call + reservation
-// bookkeeping. The reservation is committed on success / refunded on
-// failure — the standard reservation lifecycle, applied to a top-up
-// envelope instead of an initial open.
+// executeTopUp refills the live session's LOC funding and delivers the
+// fresh envelope to the broker. LOC pins the refill to the session's
+// original broker (same recipient + work_id, nonce incremented), so no
+// re-resolve / match-by-broker step exists anymore. Refills don't open
+// per-envelope reservation rows — LOC's session ledger is the
+// authoritative money log; the gateway tracks loc_refill_count for
+// operator visibility.
+//
 // executeTopUp returns (outcome, error). On success, outcome is empty
 // (the caller uses "succeeded"); on failure, outcome is one of:
-// resolver_failed, broker_drift, mint_failed, reservation_failed,
-// broker_failed. Distinct labels let dashboards surface the failure
-// kind directly.
+// loc_unavailable, no_loc_session, cap_reached, refill_failed,
+// rotation_unrecoverable, broker_failed. Distinct labels let dashboards
+// surface the failure kind directly.
 func (r *LiveReconciler) executeTopUp(ctx context.Context, live *repo.LiveStream) (string, error) {
-	if r.deps.Resolver == nil || r.deps.Payer == nil {
-		return "resolver_failed", errors.New("topup: resolver/payer unavailable")
+	if r.deps.LOC == nil {
+		return "loc_unavailable", errors.New("topup: LOC not configured")
 	}
-	// Re-resolve a candidate to get the current price + quote metadata
-	// for this capability. We use the existing broker for the topup
-	// regardless — the broker keeps session affinity, so we can't
-	// failover mid-session even if the registry now prefers a different
-	// orch. SelectMany is still the cleanest way to get the quote params.
-	candidates, err := r.deps.Resolver.SelectMany(ctx, service.SelectRequest{
-		Capability: live.Capability,
-		Offering:   live.Offering,
-	})
+	if live.LOCSessionID == nil {
+		// Pre-migration row — there's no LOC session to refill. The
+		// stream runs until its broker-side balance drains.
+		return "no_loc_session", errors.New("topup: live session has no LOC session id (pre-LOC row)")
+	}
+	refill, err := r.deps.LOC.RefillSession(ctx, *live.LOCSessionID, loc.RefillSessionRequest{})
 	if err != nil {
-		return "resolver_failed", err
-	}
-	var c *service.Candidate
-	for i := range candidates {
-		if candidates[i].WorkerURL == *live.BrokerURL {
-			c = &candidates[i]
-			break
+		if loc.IsInsufficientCredit(err) {
+			// Session / spend-period cap reached — LOC will keep refusing.
+			// End the stream gracefully instead of letting the broker
+			// starve it mid-broadcast.
+			r.windDown(ctx, live, "cap_reached")
+			return "cap_reached", err
 		}
+		return "refill_failed", err
 	}
-	if c == nil {
-		return "broker_drift", errors.New("topup: original broker no longer advertises this capability")
+	payment, err := refill.PaymentBytes()
+	if err != nil {
+		return "refill_failed", err
 	}
-
-	estUnits := int64(r.topupFundSecs) * 1000 // ~1000 units/sec for live; matches the runner's seconds extractor cadence
-	if estUnits < 1 {
-		estUnits = 1
-	}
-	face := faceValue(estUnits, c.PricePerWorkUnitWei)
-	envelope, mintErr := r.deps.Payer.MintEnvelope(ctx, livepeer.MintRequest{
-		RecipientEthAddrHex:   c.EthAddress,
-		BrokerURL:             c.WorkerURL,
-		Capability:            c.Capability,
-		Offering:              c.Offering,
-		PricePerUnitWei:       c.PricePerWorkUnitWei,
-		UnitsPerPrice:         c.UnitsPerPrice,
-		WorkUnitName:          c.WorkUnit,
-		QuoteID:               c.QuoteID,
-		QuoteVersion:          c.QuoteVersion,
-		ConstraintFingerprint: c.ConstraintFingerprint,
-		RouteFingerprint:      c.RouteFingerprint,
-		EstimatedUnits:        uint64(estUnits),
-		FundedValueWei:        face,
-		MaxTotalUnits:         0,
-		TopUpAllowed:          true,
-	})
-	if mintErr != nil {
-		return "mint_failed", mintErr
-	}
-
-	// Open a new per-envelope reservation row linked to this live session.
-	topupWorkID := uuid.New()
-	res, resErr := r.deps.Usage.Open(ctx, repo.OpenInput{
-		APIKeyID:            live.APIKeyID,
-		WorkID:              topupWorkID,
-		Capability:          live.Capability,
-		Offering:            live.Offering,
-		EstimatedWorkUnits:  &estUnits,
-		PricePerWorkUnitWei: c.PricePerWorkUnitWei,
-	})
-	if resErr != nil {
-		return "reservation_failed", resErr
-	}
-	_ = r.deps.Usage.SetLiveStreamID(ctx, topupWorkID, live.ID)
 
 	requestID := uuid.NewString()
 	topupResp, err := r.deps.HTTP.TopUpLiveSession(ctx,
-		c.WorkerURL, *live.BrokerSessionID,
-		c.Capability, c.Offering, requestID, envelope.PaymentBytes,
+		*live.BrokerURL, *live.BrokerSessionID,
+		live.Capability, live.Offering, requestID, payment,
 		livepeer.LiveTopUpRequest{GatewaySessionID: live.ID},
 	)
-	if err != nil {
-		// Session-rotation retry-once on the top-up path. If the broker
-		// returns 401 + INVALID_RECIPIENT_RAND, evict the payer-daemon
-		// cache, re-mint, retry once. Mirrors the dispatcher's logic.
-		if livepeer.IsInvalidRecipientRandError(err) && envelope.WorkID != "" {
-			if rerr := r.deps.Payer.ReportPaymentResult(ctx, envelope.WorkID, c.Capability, c.Offering,
-				paymentsv1.PaymentRejectionReason_PAYMENT_REJECTION_REASON_INVALID_RECIPIENT_RAND); rerr == nil {
-				if re, mintErr := r.deps.Payer.MintEnvelope(ctx, livepeer.MintRequest{
-					RecipientEthAddrHex:   c.EthAddress,
-					BrokerURL:             c.WorkerURL,
-					Capability:            c.Capability,
-					Offering:              c.Offering,
-					PricePerUnitWei:       c.PricePerWorkUnitWei,
-					UnitsPerPrice:         c.UnitsPerPrice,
-					WorkUnitName:          c.WorkUnit,
-					QuoteID:               c.QuoteID,
-					QuoteVersion:          c.QuoteVersion,
-					ConstraintFingerprint: c.ConstraintFingerprint,
-					RouteFingerprint:      c.RouteFingerprint,
-					EstimatedUnits:        uint64(estUnits),
-					FundedValueWei:        face,
-					MaxTotalUnits:         0,
-					TopUpAllowed:          true,
-				}); mintErr == nil {
-					topupResp, err = r.deps.HTTP.TopUpLiveSession(ctx,
-						c.WorkerURL, *live.BrokerSessionID,
-						c.Capability, c.Offering, requestID, re.PaymentBytes,
-						livepeer.LiveTopUpRequest{GatewaySessionID: live.ID},
-					)
-					r.deps.Metrics.SessionRotationRetries.WithLabelValues(c.Capability, service.RotationOutcomeSucceeded).Inc()
+	if err != nil && livepeer.IsInvalidRecipientRandError(err) {
+		// The broker rotated its payment session. LOC exposes no
+		// rotation-recovery primitive (no ReportPaymentResult) and the
+		// refill is pinned to the rotated recipient — retry once in case
+		// LOC's daemon refreshed its cache, then give up gracefully.
+		if refill2, rerr := r.deps.LOC.RefillSession(ctx, *live.LOCSessionID, loc.RefillSessionRequest{}); rerr == nil {
+			if payment2, perr := refill2.PaymentBytes(); perr == nil {
+				topupResp, err = r.deps.HTTP.TopUpLiveSession(ctx,
+					*live.BrokerURL, *live.BrokerSessionID,
+					live.Capability, live.Offering, requestID, payment2,
+					livepeer.LiveTopUpRequest{GatewaySessionID: live.ID},
+				)
+				outcome := "succeeded"
+				if err != nil {
+					outcome = "retry_failed"
 				}
+				r.deps.Metrics.SessionRotationRetries.WithLabelValues(live.Capability, outcome).Inc()
 			}
 		}
-		if err != nil {
-			_ = r.deps.Usage.Refund(ctx, res.ID, 502, truncate(err.Error(), 200))
-			r.deps.Metrics.ProxyReservationsTotal.WithLabelValues(c.Capability, "refunded").Inc()
-			return "broker_failed", err
+		if err != nil && livepeer.IsInvalidRecipientRandError(err) {
+			// Unrecoverable: end the stream cleanly rather than letting
+			// the balance starve. Tracked as an upstream LOC gap.
+			r.windDown(ctx, live, "rotation_unrecoverable")
+			return "rotation_unrecoverable", err
 		}
 	}
+	if err != nil {
+		return "broker_failed", err
+	}
 
-	statusCode := 200
-	_ = r.deps.Usage.Commit(ctx, res.ID, repo.CommitInput{
-		BrokerURL:  c.WorkerURL,
-		EthAddress: c.EthAddress,
-		StatusCode: &statusCode,
-	})
-	r.deps.Metrics.ProxyReservationsTotal.WithLabelValues(c.Capability, "committed").Inc()
+	_ = r.deps.Live.IncrementLOCRefill(ctx, live.ID)
+	if refill.CapStatus.WillRefuseNextRefill {
+		reason := ""
+		if refill.CapStatus.WinddownReason != nil {
+			reason = *refill.CapStatus.WinddownReason
+		}
+		r.deps.Log.Warn("live topup: LOC will refuse the next refill — stream ends when this funding drains",
+			"live_id", live.ID, "winddown_reason", reason,
+			"refill_seq", refill.RefillSeq)
+	}
 	r.deps.Log.Info("live topup: succeeded",
 		"live_id", live.ID,
 		"broker_session_id", *live.BrokerSessionID,
 		"new_runway_secs", topupResp.Balance.RunwaySecondsEstimate,
-		"work_id", topupWorkID)
+		"loc_refill_seq", refill.RefillSeq)
 	return "", nil
+}
+
+// windDown ends a live stream gracefully when its funding can't
+// continue (cap reached, unrecoverable payment-session rotation): end
+// the broker session, settle the LOC session, mark the row ended, and
+// tear down the customer's RTMP relay so OBS sees a clean disconnect.
+func (r *LiveReconciler) windDown(ctx context.Context, live *repo.LiveStream, reason string) {
+	r.deps.Log.Warn("live: winding down session", "live_id", live.ID, "reason", reason)
+	if live.BrokerURL != nil && live.BrokerSessionID != nil {
+		if _, err := r.deps.HTTP.EndLiveSession(ctx,
+			*live.BrokerURL, *live.BrokerSessionID, uuid.NewString(), reason); err != nil {
+			r.deps.Log.Warn("live winddown: broker end failed; continuing local teardown",
+				"live_id", live.ID, "err", err)
+		}
+	}
+	_ = r.deps.Live.EndWithReason(ctx, live.ID, repo.LiveEnded, reason)
+	closeLiveLOCSession(ctx, r.deps, live, reason)
+	if r.deps.RTMPProbe != nil {
+		if closed := r.deps.RTMPProbe.CloseSession(live.ID.String()); closed {
+			r.deps.Log.Info("live winddown: rtmp relay torn down", "live_id", live.ID)
+		}
+	}
+	r.deps.Metrics.LiveStreamsActive.Dec()
 }
 
 // truncate keeps long broker error bodies from blowing out the usage

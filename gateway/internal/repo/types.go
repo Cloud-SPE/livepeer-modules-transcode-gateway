@@ -81,9 +81,31 @@ type UsageReservation struct {
 	RunnerErrorText       *string
 	RunnerStateJSON       []byte
 	RunnerCompletedAt     *time.Time
+	// LOC job linkage (migration 0009). The gateway mints payments via
+	// LOC's jobs API; every LOC job must eventually be settled. Nil /
+	// SettleNone for pre-LOC rows.
+	LOCJobID         *uuid.UUID
+	LOCWorkID        *string
+	FundedValueWei   *big.Int
+	ExpectedValueWei *big.Int
+	BilledValueWei   *big.Int
+	SettledAt        *time.Time
+	SettleState      SettleState
 	CreatedAt             time.Time
 	ResolvedAt            *time.Time
 }
+
+// SettleState tracks the LOC settle lifecycle independently of the
+// reservation state (which records the broker dispatch outcome).
+type SettleState string
+
+const (
+	SettleNone     SettleState = "none"     // pre-LOC row, no settle owed
+	SettlePending  SettleState = "pending"  // LOC job created; settle not yet confirmed
+	SettleSettled  SettleState = "settled"  // billed actual units
+	SettleRefunded SettleState = "refunded" // settled with 0 units (failed dispatch)
+	SettleFailed   SettleState = "failed"   // terminal settle error (operator attention)
+)
 
 type LiveStreamStatus string
 
@@ -129,6 +151,11 @@ type LiveStream struct {
 	// recently reported (ingest + output blocks). Nil if absent. Admin
 	// UI parses opportunistically; the gateway never interprets it.
 	RunnerStatusJSON  []byte
+	// LOC session linkage (migration 0010). Nil for pre-LOC rows.
+	LOCSessionID   *uuid.UUID
+	LOCWorkID      *string
+	LOCRefillCount int
+	LOCClosedAt    *time.Time
 }
 
 type Capability struct {

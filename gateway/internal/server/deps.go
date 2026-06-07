@@ -7,7 +7,7 @@ import (
 	"github.com/Cloud-SPE/livepeer-modules-transcode-gateway/gateway/internal/email"
 	"github.com/Cloud-SPE/livepeer-modules-transcode-gateway/gateway/internal/metrics"
 	"github.com/Cloud-SPE/livepeer-modules-transcode-gateway/gateway/internal/proxy/livepeer"
-	"github.com/Cloud-SPE/livepeer-modules-transcode-gateway/gateway/internal/proxy/service"
+	"github.com/Cloud-SPE/livepeer-modules-transcode-gateway/gateway/internal/proxy/loc"
 	"github.com/Cloud-SPE/livepeer-modules-transcode-gateway/gateway/internal/repo"
 	"github.com/Cloud-SPE/livepeer-modules-transcode-gateway/gateway/internal/s3"
 
@@ -28,10 +28,10 @@ type Deps struct {
 	Caps     *repo.CapabilityRepo
 	Email    *email.Mailer
 	S3       *s3.Client
-	Payer    *livepeer.PayerClient
-	Resolver *service.RouteSelector
-	Health   *service.Health
-	HTTP     *livepeer.HTTPClient
+	// LOC is the clearinghouse client: payments + route selection for
+	// both ABR jobs and live sessions. Nil when LOC_API_KEY is unset.
+	LOC  *loc.Client
+	HTTP *livepeer.HTTPClient
 	CapMap   livepeer.CapabilityMap
 	Metrics  *metrics.Registry
 	// RTMPProbe is a cheap readiness check the /health handler calls

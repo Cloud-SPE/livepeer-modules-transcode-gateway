@@ -1,19 +1,17 @@
 import { LitElement, html } from 'lit';
 import { api } from '../lib/api.js';
 
-// Operator-facing health: gateway /health + route-health snapshot.
+// Operator-facing health: gateway /health composite readiness.
 
 class CcNetworkHealth extends LitElement {
   static properties = {
     health:      { state: true },
-    routeHealth: { state: true },
     error:       { state: true },
   };
 
   constructor() {
     super();
     this.health = null;
-    this.routeHealth = null;
     this.error = '';
   }
 
@@ -26,9 +24,6 @@ class CcNetworkHealth extends LitElement {
     } catch (err) {
       this.error = err.message;
     }
-    try {
-      this.routeHealth = await api('/admin/registry/health');
-    } catch { /* skip */ }
   }
 
   render() {
@@ -54,34 +49,6 @@ class CcNetworkHealth extends LitElement {
               )}
             </ul>`
           : html`<p class="msg">Loading…</p>`}
-      </div>
-
-      <div class="card">
-        <h2>Route health (in-memory)</h2>
-        <p class="msg">
-          Per-candidate failure counters and active cooldowns. Process-local
-          state — resets on gateway restart. After
-          <code>${this.routeHealth?.failure_threshold ?? 2}</code> consecutive
-          failures a candidate enters a
-          <code>${this.routeHealth?.cooldown_seconds ?? 30}</code>-second
-          cooldown and is skipped on the failover loop.
-        </p>
-        ${!this.routeHealth || (this.routeHealth.items?.length ?? 0) === 0
-          ? html`<p class="msg ok">No unhealthy candidates right now.</p>`
-          : html`<table>
-              <thead><tr><th>Candidate</th><th>Consec failures</th><th>Cooling down until</th></tr></thead>
-              <tbody>
-                ${this.routeHealth.items.map(
-                  (e) => html`<tr>
-                    <td><code>${e.key}</code></td>
-                    <td>${e.consec_failures}</td>
-                    <td>${e.cooling_down
-                      ? html`<span class="pill warn">${new Date(e.cooldown_until).toLocaleTimeString()}</span>`
-                      : html`<span class="msg">—</span>`}</td>
-                  </tr>`,
-                )}
-              </tbody>
-            </table>`}
       </div>
 
       ${this.error ? html`<p class="msg error">${this.error}</p>` : ''}

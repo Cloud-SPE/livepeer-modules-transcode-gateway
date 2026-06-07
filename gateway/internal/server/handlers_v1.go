@@ -13,9 +13,8 @@ import (
 	"github.com/Cloud-SPE/livepeer-modules-transcode-gateway/gateway/internal/abr"
 	"github.com/Cloud-SPE/livepeer-modules-transcode-gateway/gateway/internal/crypto"
 	"github.com/Cloud-SPE/livepeer-modules-transcode-gateway/gateway/internal/proxy/livepeer"
-	"github.com/Cloud-SPE/livepeer-modules-transcode-gateway/gateway/internal/proxy/service"
+	"github.com/Cloud-SPE/livepeer-modules-transcode-gateway/gateway/internal/proxy/loc"
 	"github.com/Cloud-SPE/livepeer-modules-transcode-gateway/gateway/internal/repo"
-	paymentsv1 "github.com/Cloud-SPE/livepeer-network-modules/livepeer-network-protocol/proto-go/livepeer/payments/v1"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/google/uuid"
@@ -192,26 +191,32 @@ func registerV1ABR(api huma.API, deps Deps) {
 		Summary:     "Submit an ABR ladder transcode job",
 		Tags:        []string{"v1"},
 	}, func(ctx context.Context, in *ABRIn) (*ABROut, error) {
-		if deps.Resolver == nil {
-			return nil, huma.Error503ServiceUnavailable("registry_unavailable")
-		}
-		if deps.Payer == nil {
-			return nil, huma.Error503ServiceUnavailable("payer_unavailable")
+		if deps.LOC == nil {
+			return nil, huma.Error503ServiceUnavailable("loc_unavailable")
 		}
 		ak := APIKeyFromCtx(ctx)
 		if ak == nil {
 			return nil, huma.Error401Unauthorized("invalid_api_key")
 		}
-		spec := deps.CapMap.ABR
-		candidates, err := deps.Resolver.SelectMany(ctx, service.SelectRequest{
-			Capability: spec.Capability,
-			Offering:   spec.DefaultOffering,
-		})
-		if err != nil {
-			return nil, huma.Error502BadGateway("registry_select_failed", err)
+		if deps.S3 == nil {
+			return nil, huma.Error503ServiceUnavailable("s3_unavailable",
+				fmt.Errorf("output_urls require S3 — not configured"))
 		}
+		presetName := in.Body.Preset
+		if presetName == "" {
+			presetName = "abr-standard"
+		}
+		preset, ok := abr.Get(presetName)
+		if !ok {
+			return nil, huma.Error400BadRequest(
+				fmt.Sprintf("unknown preset %q (known: %v)", presetName, abr.Names()))
+		}
+		spec := deps.CapMap.ABR
 		workID := uuid.New()
-		estUnits := int64(0)
+		// LOC requires estimated_units > 0; jobs are settled against the
+		// same estimate after dispatch (the runner webhook carries no
+		// unit counts), so the estimate is also what we bill.
+		estUnits := int64(1)
 		if in.Body.EstimatedSecs > 0 {
 			estUnits = int64(in.Body.EstimatedSecs * abrUnitsPerInputSecond)
 		}
@@ -226,6 +231,33 @@ func registerV1ABR(api huma.API, deps Deps) {
 			return nil, huma.Error500InternalServerError("reservation open failed", err)
 		}
 
+		// Broker request body is job-independent — mint outputs + webhook
+		// hookup once, reuse across rotation retries.
+		outputs, masterPlaybackURL, err := mintABROutputs(ctx, deps, ak.ID.String(), workID.String(), preset)
+		if err != nil {
+			_ = deps.Usage.Refund(ctx, res.ID, 500, err.Error())
+			return nil, huma.Error500InternalServerError("mint output_urls", err)
+		}
+		body := map[string]any{
+			"input_url":   in.Body.InputURL,
+			"preset":      presetName,
+			"output_urls": outputs,
+		}
+		if in.Body.Ladder != nil {
+			body["ladder"] = in.Body.Ladder
+		}
+		// Webhook hookup — runner POSTs status transitions back when both
+		// webhook_url + webhook_secret are set. Unset → gateway stays
+		// oblivious (same as before).
+		if deps.Cfg.GatewayPublicURL != "" {
+			secret, _ := crypto.RandomToken(32)
+			if err := deps.Usage.SetWebhookSecret(ctx, workID, secret); err == nil {
+				body["webhook_url"] = strings.TrimRight(deps.Cfg.GatewayPublicURL, "/") +
+					"/api/webhooks/abr?work_id=" + workID.String()
+				body["webhook_secret"] = secret
+			}
+		}
+
 		// abr-runner's submit response shape: { job_id, status, renditions:[name,...] }.
 		// The runner returns rendition NAMES (strings); we map them to the
 		// playback URLs the gateway minted so the client gets ready-to-play
@@ -235,115 +267,81 @@ func registerV1ABR(api huma.API, deps Deps) {
 			Status     string   `json:"status"`
 			Renditions []string `json:"renditions,omitempty"`
 		}
-		started := time.Now()
-		var masterPlaybackURL string // captured from the Do closure
-		result, used, err := service.Dispatch(ctx, candidates, deps.Health, service.Attempt{
-			MintPayment: func(ctx context.Context, c service.Candidate) ([]byte, string, error) {
-				face := faceValue(estUnits, c.PricePerWorkUnitWei)
-				envelope, err := deps.Payer.MintEnvelope(ctx, livepeer.MintRequest{
-					RecipientEthAddrHex:   c.EthAddress,
-					BrokerURL:             c.WorkerURL,
-					Capability:            c.Capability,
-					Offering:              c.Offering,
-					PricePerUnitWei:       c.PricePerWorkUnitWei,
-					UnitsPerPrice:         c.UnitsPerPrice,
-					WorkUnitName:          c.WorkUnit,
-					QuoteID:               c.QuoteID,
-					QuoteVersion:          c.QuoteVersion,
-					ConstraintFingerprint: c.ConstraintFingerprint,
-					RouteFingerprint:      c.RouteFingerprint,
-					EstimatedUnits:        uint64(maxInt64(estUnits, 1)),
-					FundedValueWei:        face,
-					MaxTotalUnits:         uint64(maxInt64(estUnits, 1)),
-					TopUpAllowed:          false,
-				})
-				if err != nil {
-					return nil, "", err
+
+		// Create-job + dispatch loop. LOC selects the route and encumbers
+		// worst-case credit at create; every failed create attempt MUST be
+		// settled with actual_units=0 to release the encumbrance. On
+		// INVALID_RECIPIENT_RAND (receiver rotated its payment session) LOC
+		// has no ReportPaymentResult — recovery is settle(0) + a fresh
+		// CreateJob, which mints a fresh envelope. One retry, then fail.
+		const maxCreates = 2
+		var (
+			j        brokerJob
+			job      *loc.CreateJobResponse
+			rotated  bool
+			started  = time.Now()
+		)
+		for attempt := 1; ; attempt++ {
+			job, err = deps.LOC.CreateJob(ctx, loc.CreateJobRequest{
+				Capability:     spec.Capability,
+				Offering:       spec.DefaultOffering,
+				EstimatedUnits: estUnits,
+			})
+			if err != nil {
+				deps.Metrics.ProxyReservationsTotal.WithLabelValues(spec.Capability, "refunded").Inc()
+				switch {
+				case loc.IsNoRoute(err):
+					_ = deps.Usage.Refund(ctx, res.ID, 502, err.Error())
+					return nil, huma.Error502BadGateway("no_capable_broker", err)
+				case loc.IsInsufficientCredit(err):
+					_ = deps.Usage.Refund(ctx, res.ID, 402, err.Error())
+					return nil, huma.NewError(http.StatusPaymentRequired, "insufficient_credit", err)
+				default:
+					_ = deps.Usage.Refund(ctx, res.ID, 502, err.Error())
+					return nil, huma.Error502BadGateway("loc_create_job_failed", err)
 				}
-				return envelope.PaymentBytes, envelope.WorkID, nil
-			},
-			ReportRotation: func(ctx context.Context, c service.Candidate, workID string) error {
-				return deps.Payer.ReportPaymentResult(ctx, workID, c.Capability, c.Offering,
-					paymentsv1.PaymentRejectionReason_PAYMENT_REJECTION_REASON_INVALID_RECIPIENT_RAND)
-			},
-			OnRotation: func(ctx context.Context, c service.Candidate, workID, outcome string, rotErr error) {
-				deps.Metrics.SessionRotationRetries.WithLabelValues(c.Capability, outcome).Inc()
-				level := "warn"
-				if outcome == service.RotationOutcomeSucceeded {
-					level = "info"
-				}
-				attrs := []any{
-					"work_id", workID,
-					"capability", c.Capability,
-					"offering", c.Offering,
-					"broker", c.WorkerURL,
-					"outcome", outcome,
-				}
-				if rotErr != nil {
-					attrs = append(attrs, "err", rotErr.Error())
-				}
-				if level == "info" {
-					deps.Log.Info("dispatcher: session-rotation retry succeeded", attrs...)
-				} else {
-					deps.Log.Warn("dispatcher: session-rotation retry", attrs...)
-				}
-			},
-			Do: func(ctx context.Context, c service.Candidate, payment []byte) (any, error) {
-				presetName := in.Body.Preset
-				if presetName == "" {
-					presetName = "abr-standard"
-				}
-				preset, ok := abr.Get(presetName)
-				if !ok {
-					return nil, fmt.Errorf("unknown preset %q (known: %v)", presetName, abr.Names())
-				}
-				if deps.S3 == nil {
-					return nil, fmt.Errorf("output_urls require S3 — not configured")
-				}
-				outputs, masterURL, err := mintABROutputs(ctx, deps, ak.ID.String(), workID.String(), preset)
-				if err != nil {
-					return nil, fmt.Errorf("mint output_urls: %w", err)
-				}
-				masterPlaybackURL = masterURL
-				body := map[string]any{
-					"input_url":   in.Body.InputURL,
-					"preset":      presetName,
-					"output_urls": outputs,
-				}
-				if in.Body.Ladder != nil {
-					body["ladder"] = in.Body.Ladder
-				}
-				// Webhook hookup — runner POSTs status transitions back
-				// when both webhook_url + webhook_secret are set.
-				// Unset → gateway stays oblivious (same as before).
-				if deps.Cfg.GatewayPublicURL != "" {
-					secret, _ := crypto.RandomToken(32)
-					if err := deps.Usage.SetWebhookSecret(ctx, workID, secret); err == nil {
-						body["webhook_url"] = strings.TrimRight(deps.Cfg.GatewayPublicURL, "/") +
-							"/api/webhooks/abr?work_id=" + workID.String()
-						body["webhook_secret"] = secret
-					}
-				}
-				var j brokerJob
-				dispatchURL := strings.TrimRight(c.WorkerURL, "/") + "/v1/cap"
-				if err := deps.HTTP.PostJSON(ctx, dispatchURL,
-					c.Capability, c.Offering, RequestIDFrom(ctx), payment, body, &j); err != nil {
-					return nil, err
-				}
-				return j, nil
-			},
-		})
+			}
+			// Link the LOC job BEFORE the broker call so a crash mid-
+			// dispatch leaves a 'pending' row the settle janitor releases.
+			// On a rotation retry this overwrites the abandoned job's ids —
+			// its settle(0) below has its own retries; a residual leak is
+			// surfaced via the warn log.
+			_ = deps.Usage.SetLOCJob(ctx, workID, job.JobID, job.WorkID,
+				job.FundedValueWei.BigInt(), job.ExpectedValueWei.BigInt())
+
+			var payment []byte
+			if payment, err = job.PaymentBytes(); err == nil {
+				dispatchURL := strings.TrimRight(job.BrokerURL, "/") + "/v1/cap"
+				err = deps.HTTP.PostJSON(ctx, dispatchURL,
+					spec.Capability, spec.DefaultOffering, RequestIDFrom(ctx), payment, body, &j)
+			}
+			if err == nil {
+				break
+			}
+			// Release this attempt's worst-case encumbrance.
+			settleLOCJob(ctx, deps, res.ID, job.JobID, 0, "broker_dispatch_failed")
+			if livepeer.IsInvalidRecipientRandError(err) && attempt < maxCreates {
+				rotated = true
+				deps.Metrics.SessionRotationRetries.WithLabelValues(spec.Capability, "retried").Inc()
+				deps.Log.Warn("abr: session rotation; re-creating LOC job",
+					"work_id", workID, "broker", job.BrokerURL, "err", err)
+				continue
+			}
+			break
+		}
 		latency := int(time.Since(started).Milliseconds())
 		if err != nil {
 			_ = deps.Usage.Refund(ctx, res.ID, 502, err.Error())
 			deps.Metrics.ProxyReservationsTotal.WithLabelValues(spec.Capability, "refunded").Inc()
 			return nil, huma.Error502BadGateway("upstream_broker_error", err)
 		}
-		j := result.(brokerJob)
+		if rotated {
+			deps.Metrics.SessionRotationRetries.WithLabelValues(spec.Capability, "succeeded").Inc()
+		}
 		statusCode := 200
 		_ = deps.Usage.Commit(ctx, res.ID, repo.CommitInput{
-			BrokerURL:  used.WorkerURL,
-			EthAddress: used.EthAddress,
+			BrokerURL: job.BrokerURL,
+			// LOC owns the recipient identity now — no eth_address surfaced.
 			LatencyMs:  &latency,
 			StatusCode: &statusCode,
 		})
@@ -353,6 +351,10 @@ func registerV1ABR(api huma.API, deps Deps) {
 			_ = deps.Usage.SetRunnerJobID(ctx, workID, j.JobID)
 		}
 		deps.Metrics.ProxyReservationsTotal.WithLabelValues(spec.Capability, "committed").Inc()
+		// Settle against the estimate now — releases funded − billed back
+		// to the credit pool. On failure the row stays 'pending' and the
+		// settle janitor retries.
+		settleLOCJob(ctx, deps, res.ID, job.JobID, estUnits, "dispatched")
 		// Convert the runner's rendition-name list into URL-bearing rows by
 		// pairing each name with the playback URL the gateway already minted.
 		rendOut := make([]ABRRendition, 0, len(j.Renditions))
@@ -369,8 +371,7 @@ func registerV1ABR(api huma.API, deps Deps) {
 			InputURL:          in.Body.InputURL,
 			MasterPlaylistURL: masterPlaybackURL,
 			Renditions:        rendOut,
-			BrokerURL:         used.WorkerURL,
-			EthAddress:        used.EthAddress,
+			BrokerURL:         job.BrokerURL,
 			CreatedAt:         res.CreatedAt,
 		}
 		return out, nil
@@ -595,11 +596,8 @@ func registerV1Live(api huma.API, deps Deps) {
 		Summary:     "Allocate an RTMP ingest + HLS egress session",
 		Tags:        []string{"v1"},
 	}, func(ctx context.Context, in *LiveIn) (*LiveCreateOut, error) {
-		if deps.Resolver == nil {
-			return nil, huma.Error503ServiceUnavailable("registry_unavailable")
-		}
-		if deps.Payer == nil {
-			return nil, huma.Error503ServiceUnavailable("payer_unavailable")
+		if deps.LOC == nil {
+			return nil, huma.Error503ServiceUnavailable("loc_unavailable")
 		}
 		ak := APIKeyFromCtx(ctx)
 		if ak == nil {
@@ -686,6 +684,9 @@ func registerV1Live(api huma.API, deps Deps) {
 			}
 		}
 		_ = deps.Live.EndWithReason(ctx, live.ID, repo.LiveEnded, closeReason)
+		// Settle the LOC session (duration-estimate units; idempotent
+		// via ClaimLOCClose — the reconciler may have beaten us here).
+		closeLiveLOCSession(ctx, deps, live, "gateway_close")
 		// Synchronously tear down the customer's RTMP socket + our
 		// upstream relay push. Without this, OBS would happily keep
 		// pushing bytes to a now-dead broker session until TCP
@@ -764,6 +765,12 @@ func reconcileLiveSession(ctx context.Context, deps Deps, live *repo.LiveStream)
 	}
 	// Re-load so callers see the freshly-written state.
 	reloaded, _ := deps.Live.GetByID(ctx, live.ID, live.APIKeyID)
+	// Broker drove the session terminal (balance exhausted, runner
+	// crash, idle timeout, …) — settle the LOC session too. ClaimLOCClose
+	// makes this race-safe against the customer DELETE path.
+	if reloaded != nil && (reloaded.Status == repo.LiveEnded || reloaded.Status == repo.LiveFailed) {
+		closeLiveLOCSession(ctx, deps, reloaded, "broker_ended")
+	}
 	return reloaded
 }
 
@@ -827,47 +834,15 @@ func openLiveGatewayIngest(ctx context.Context, deps Deps, ak *repo.APIKey, in *
 		return nil, huma.Error503ServiceUnavailable("rtmp_ingress_disabled",
 			fmt.Errorf("set LIVE_RTMP_PORT to enable gateway_ingest mode"))
 	}
-	// Resolve a live-capable orch under `video:transcode.live` with the
-	// gateway-ingest offering label.
+	// `video:transcode.live` with the gateway-ingest offering label —
+	// LOC resolves the route when we open the session below.
 	gwCapability := deps.CapMap.Live.Capability
 	gwOffering := deps.Cfg.LiveGatewayIngestOffering
 	if gwOffering == "" {
 		gwOffering = "gateway-ingest"
 	}
-	candidates, err := deps.Resolver.SelectMany(ctx, service.SelectRequest{
-		Capability: gwCapability,
-		Offering:   gwOffering,
-	})
-	if err != nil {
-		return nil, huma.Error502BadGateway("registry_select_failed", err)
-	}
-	if len(candidates) == 0 {
-		return nil, huma.Error502BadGateway("no_capable_broker")
-	}
-	c := candidates[0]
 
 	const liveInitialEstUnits int64 = 60_000
-	face := faceValue(liveInitialEstUnits, c.PricePerWorkUnitWei)
-	envelope, err := deps.Payer.MintEnvelope(ctx, livepeer.MintRequest{
-		RecipientEthAddrHex:   c.EthAddress,
-		BrokerURL:             c.WorkerURL,
-		Capability:            c.Capability,
-		Offering:              c.Offering,
-		PricePerUnitWei:       c.PricePerWorkUnitWei,
-		UnitsPerPrice:         c.UnitsPerPrice,
-		WorkUnitName:          c.WorkUnit,
-		QuoteID:               c.QuoteID,
-		QuoteVersion:          c.QuoteVersion,
-		ConstraintFingerprint: c.ConstraintFingerprint,
-		RouteFingerprint:      c.RouteFingerprint,
-		EstimatedUnits:        uint64(liveInitialEstUnits),
-		FundedValueWei:        face,
-		MaxTotalUnits:         0,
-		TopUpAllowed:          true,
-	})
-	if err != nil {
-		return nil, huma.Error502BadGateway("mint_payment_failed", err)
-	}
 
 	// Open reservation row + live row in 'gateway_ingest' mode. The
 	// row's capability records the gateway-ingest id (NOT the legacy
@@ -943,40 +918,57 @@ func openLiveGatewayIngest(ctx context.Context, deps Deps, ak *repo.APIKey, in *
 		},
 		IngestAccept: livepeer.LiveIngestAccept{StreamKey: ingestAcceptKey},
 	}
-	sess, err := deps.HTTP.OpenLiveSessionGatewayIngest(ctx, c.WorkerURL,
-		c.Capability, c.Offering, RequestIDFrom(ctx), envelope.PaymentBytes, openBody)
-	if err != nil {
-		// Session-rotation retry-once: if the broker rejects our payment
-		// envelope because the receiver rotated, ReportPaymentResult to
-		// evict + re-mint + retry once before giving up.
-		if livepeer.IsInvalidRecipientRandError(err) && envelope.WorkID != "" {
-			if rerr := deps.Payer.ReportPaymentResult(ctx, envelope.WorkID, c.Capability, c.Offering,
-				paymentsv1.PaymentRejectionReason_PAYMENT_REJECTION_REASON_INVALID_RECIPIENT_RAND); rerr == nil {
-				// Re-mint and retry once.
-				face2 := faceValue(liveInitialEstUnits, c.PricePerWorkUnitWei)
-				if re, mintErr := deps.Payer.MintEnvelope(ctx, livepeer.MintRequest{
-					RecipientEthAddrHex:   c.EthAddress,
-					BrokerURL:             c.WorkerURL,
-					Capability:            c.Capability,
-					Offering:              c.Offering,
-					PricePerUnitWei:       c.PricePerWorkUnitWei,
-					UnitsPerPrice:         c.UnitsPerPrice,
-					WorkUnitName:          c.WorkUnit,
-					QuoteID:               c.QuoteID,
-					QuoteVersion:          c.QuoteVersion,
-					ConstraintFingerprint: c.ConstraintFingerprint,
-					RouteFingerprint:      c.RouteFingerprint,
-					EstimatedUnits:        uint64(liveInitialEstUnits),
-					FundedValueWei:        face2,
-					MaxTotalUnits:         0,
-					TopUpAllowed:          true,
-				}); mintErr == nil {
-					envelope = re
-					sess, err = deps.HTTP.OpenLiveSessionGatewayIngest(ctx, c.WorkerURL,
-						c.Capability, c.Offering, RequestIDFrom(ctx), re.PaymentBytes, openBody)
-				}
+
+	// LOC session open + broker dispatch, with rotation retry-once. LOC
+	// encumbers toward max_total_units at open, so every failed attempt
+	// MUST close(0) to release the credit. On INVALID_RECIPIENT_RAND
+	// (receiver rotated its payment session) the recovery is close(0) +
+	// a fresh OpenSession, which mints a fresh envelope.
+	var (
+		locSess *loc.CreateSessionResponse
+		sess    *livepeer.LiveOpenGatewayIngestResponse
+	)
+	for attempt := 1; ; attempt++ {
+		locSess, err = deps.LOC.OpenSession(ctx, loc.CreateSessionRequest{
+			Capability:           gwCapability,
+			Offering:             gwOffering,
+			EstimatedRunwayUnits: liveInitialEstUnits,
+			MaxTotalUnits:        deps.Cfg.LiveMaxTotalUnits,
+		})
+		if err != nil {
+			_ = deps.Live.Fail(ctx, live.ID, "loc_open_session_failed")
+			_ = deps.Usage.Refund(ctx, res.ID, 502, err.Error())
+			switch {
+			case loc.IsNoRoute(err):
+				return nil, huma.Error502BadGateway("no_capable_broker", err)
+			case loc.IsInsufficientCredit(err):
+				return nil, huma.NewError(http.StatusPaymentRequired, "insufficient_credit", err)
+			default:
+				return nil, huma.Error502BadGateway("loc_open_session_failed", err)
 			}
 		}
+		var payment []byte
+		if payment, err = locSess.PaymentBytes(); err == nil {
+			sess, err = deps.HTTP.OpenLiveSessionGatewayIngest(ctx, locSess.BrokerURL,
+				gwCapability, gwOffering, RequestIDFrom(ctx), payment, openBody)
+		}
+		if err == nil {
+			break
+		}
+		// Release this attempt's encumbrance.
+		if _, cerr := deps.LOC.CloseSession(ctx, locSess.SessionID, loc.CloseSessionRequest{
+			ActualUnits: 0, Outcome: "broker_open_failed",
+		}); cerr != nil && !loc.IsAlreadySettled(cerr) {
+			deps.Log.Warn("live: loc close after failed open also failed; session may stay encumbered",
+				"loc_session_id", locSess.SessionID, "err", cerr)
+		}
+		if livepeer.IsInvalidRecipientRandError(err) && attempt < 2 {
+			deps.Metrics.SessionRotationRetries.WithLabelValues(gwCapability, "retried").Inc()
+			deps.Log.Warn("live: session rotation on open; re-opening LOC session",
+				"live_id", live.ID, "broker", locSess.BrokerURL, "err", err)
+			continue
+		}
+		break
 	}
 	if err != nil {
 		_ = deps.Live.Fail(ctx, live.ID, err.Error())
@@ -989,9 +981,10 @@ func openLiveGatewayIngest(ctx context.Context, deps Deps, ak *repo.APIKey, in *
 	streamKeyHint := lastFour(customerStreamKey)
 	playbackURL := deps.S3.PublicHLSMasterURL(creds.KeyPrefix)
 	brokerWorkID := sess.WorkID
+	locSessionID := locSess.SessionID
 	if err := deps.Live.ActivateGatewayIngest(ctx, live.ID, repo.ActivateLiveGatewayInput{
-		BrokerURL:        c.WorkerURL,
-		EthAddress:       c.EthAddress,
+		BrokerURL: locSess.BrokerURL,
+		// LOC owns the recipient identity now — no eth_address surfaced.
 		StreamKeyHash:    streamKeyHash,
 		StreamKeyHint:    streamKeyHint,
 		S3OutputPrefix:   creds.KeyPrefix,
@@ -1000,20 +993,22 @@ func openLiveGatewayIngest(ctx context.Context, deps Deps, ak *repo.APIKey, in *
 		BrokerSessionID:  sess.BrokerSessionID,
 		RunnerSessionID:  sess.RunnerSessionID,
 		BrokerWorkID:     &brokerWorkID,
+		LOCSessionID:     &locSessionID,
+		LOCWorkID:        locSess.WorkID,
 	}); err != nil {
 		_ = deps.Live.Fail(ctx, live.ID, err.Error())
 		_ = deps.Usage.Refund(ctx, res.ID, 500, "activate_failed")
 		return nil, huma.Error500InternalServerError("activate failed", err)
 	}
 	// Reservation commits on accept; no refund on later customer DELETE
-	// (matches plan 0002 semantics).
+	// (matches plan 0002 semantics). The LOC-side accounting reconciles
+	// at CloseSession (closeLiveLOCSession).
 	statusCode := 200
 	_ = deps.Usage.Commit(ctx, res.ID, repo.CommitInput{
-		BrokerURL:  c.WorkerURL,
-		EthAddress: c.EthAddress,
+		BrokerURL:  locSess.BrokerURL,
 		StatusCode: &statusCode,
 	})
-	deps.Metrics.ProxyReservationsTotal.WithLabelValues(c.Capability, "committed").Inc()
+	deps.Metrics.ProxyReservationsTotal.WithLabelValues(gwCapability, "committed").Inc()
 	deps.Metrics.LiveStreamsActive.Inc()
 
 	// Construct the customer-facing RTMP URL rooted at OUR gateway. The
@@ -1062,8 +1057,32 @@ func stripScheme(s string) string {
 	return s
 }
 
-// faceValue derives a wei face value from estimated units × price/unit.
-// When price is nil we default to 1 wei × units (smoke-test friendly).
+// settleLOCJob settles a LOC job and records the outcome on the
+// reservation. actualUnits=0 → settle state 'refunded' (failed
+// dispatch, full encumbrance release); >0 → 'settled'. loc.SettleJob
+// already retries 429/5xx; a residual failure leaves the row 'pending'
+// for the settle janitor, and a duplicate settle (409) counts as
+// success — the first one stuck.
+func settleLOCJob(ctx context.Context, deps Deps, reservationID, jobID uuid.UUID, actualUnits int64, outcome string) {
+	state := repo.SettleSettled
+	if actualUnits == 0 {
+		state = repo.SettleRefunded
+	}
+	resp, err := deps.LOC.SettleJob(ctx, jobID, loc.SettleJobRequest{
+		ActualUnits: actualUnits,
+		Outcome:     outcome,
+	})
+	switch {
+	case err == nil:
+		_ = deps.Usage.MarkSettled(ctx, reservationID, resp.BilledValueWei.BigInt(), state)
+	case loc.IsAlreadySettled(err):
+		_ = deps.Usage.MarkSettled(ctx, reservationID, nil, state)
+	default:
+		deps.Log.Warn("loc: settle failed; settle janitor will retry",
+			"loc_job_id", jobID, "actual_units", actualUnits, "outcome", outcome, "err", err)
+	}
+}
+
 // abrOutputs is the shape the abr-runner consumes for output_urls.
 type abrOutputs struct {
 	Manifest   string                       `json:"manifest"`
@@ -1111,27 +1130,6 @@ func mintABROutputs(ctx context.Context, deps Deps, apiKeyID, workID string, pre
 		}
 	}
 	return out, deps.S3.PublicObjectURL(manifestKey), nil
-}
-
-func faceValue(units int64, pricePerUnit *big.Int) *big.Int {
-	if units <= 0 {
-		units = 1
-	}
-	if pricePerUnit == nil || pricePerUnit.Sign() <= 0 {
-		return big.NewInt(units)
-	}
-	out := new(big.Int).Mul(pricePerUnit, big.NewInt(units))
-	if out.Sign() <= 0 {
-		out.SetInt64(1)
-	}
-	return out
-}
-
-func maxInt64(a, b int64) int64 {
-	if a > b {
-		return a
-	}
-	return b
 }
 
 func bigStr(b *big.Int) string {
