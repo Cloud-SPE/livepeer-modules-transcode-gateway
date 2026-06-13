@@ -11,7 +11,6 @@ FROM golang:${GO_VERSION}-alpine AS build
 WORKDIR /workspace
 
 COPY gateway/ /workspace/gateway/
-COPY proto/   /workspace/proto/
 COPY web/     /workspace/web/
 
 # Populate the embed source directory before `go build` so the
