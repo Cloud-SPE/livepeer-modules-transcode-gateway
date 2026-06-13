@@ -11,7 +11,7 @@
 # multi-arch buildx, pushed to tztcloud/* on Docker Hub. Authenticate
 # first with `docker login docker.io -u <your-dockerhub-username>`.
 IMAGE ?= tztcloud/livepeer-video-gateway
-TAG   ?= dev
+TAG   ?= v1.4.1
 
 .PHONY: help install build lint test dev down logs clean smoke web site-ui portal-ui admin-ui \
         go-build go-test go-lint go-tidy sqlc \
@@ -41,9 +41,9 @@ help:
 	@echo "  make go-tidy        go mod tidy"
 	@echo "  make sqlc           regenerate sqlc queries into gateway/gen/db/"
 	@echo ""
-	@echo "  make docker-build TAG=v1.3.0"
+	@echo "  make docker-build TAG=v1.4.1"
 	@echo "                      build the gateway image as tztcloud/livepeer-video-gateway:<TAG>"
-	@echo "  make docker-publish TAG=v1.3.0"
+	@echo "  make docker-publish TAG=v1.4.1"
 	@echo "                      build multi-arch + push to tztcloud/* on Docker Hub"
 	@echo "                      (requires \`docker login docker.io\` first)"
 	@echo ""
@@ -132,9 +132,9 @@ clean:
 
 # ── Docker image: build + publish ───────────────────────────────────
 # docker-build: single-arch (host's arch) for quick local testing.
-#   make docker-build TAG=v1.3.0
+#   make docker-build TAG=v1.4.1
 # docker-publish: multi-arch (linux/amd64 + linux/arm64), pushed.
-#   make docker-publish TAG=v1.3.0
+#   make docker-publish TAG=v1.4.1
 # Requires `docker login docker.io` first; refuses to push :dev.
 
 docker-build:
@@ -143,7 +143,7 @@ docker-build:
 
 docker-publish:
 	@if [ "$(TAG)" = "dev" ]; then \
-		echo "refusing to publish :dev — set TAG (e.g. make docker-publish TAG=v1.3.0)"; \
+		echo "refusing to publish :dev — set TAG (e.g. make docker-publish TAG=v1.4.1)"; \
 		exit 1; \
 	fi
 	@# Default Docker driver doesn't support multi-arch — ensure a

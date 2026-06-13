@@ -254,12 +254,12 @@ The published image is `tztcloud/livepeer-video-gateway:<TAG>` on Docker
 Hub. Two ways to publish a release:
 
 - **Manual.** `docker login docker.io` (once) then
-  `make docker-publish TAG=v1.3.0`.
-- **CI.** Push a git tag: `git tag v1.3.0 && git push --tags`. The
+  `make docker-publish TAG=v1.4.1`.
+- **CI.** Push a git tag: `git tag v1.4.1 && git push --tags`. The
   workflow at `.github/workflows/ci.yml` builds + pushes via the
   `DOCKERHUB_USERNAME` + `DOCKERHUB_TOKEN` secrets (org or repo scope).
 
-The local compose stack still uses the `livepeer-video-gateway:dev` tag
+The local compose stack uses the `livepeer-video-gateway:v1.4.1` tag
 for `make dev`.
 
 ## Deployment
