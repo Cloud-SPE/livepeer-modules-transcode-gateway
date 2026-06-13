@@ -136,6 +136,9 @@ services:
 
       # ── email (optional) ──
       RESEND_API_KEY: ${RESEND_API_KEY:-}
+      # Optional resend-go SDK base-URL override (read from env by the SDK
+      # itself). Must be passed through here or the override is ignored.
+      RESEND_BASE_URL: ${RESEND_BASE_URL:-}
       FROM_EMAIL: ${FROM_EMAIL:-Livepeer Video Gateway <noreply@example.com>}
 
       # ── object store ──
