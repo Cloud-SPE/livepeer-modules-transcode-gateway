@@ -113,7 +113,7 @@ func (h *connHandler) OnPublish(_ *rtmp.StreamContext, _ uint32, cmd *rtmpmsg.Ne
 		h.stats.activePublishes.Add(-1)
 		h.authed = false
 		h.logger.Warn("rtmp: no upstream ingest URL on file; rejecting publish")
-		return errors.New("session not ready (no upstream)")
+		return errors.New("session not ready: upstream not provisioned (session open may have failed — check credit/billing)")
 	}
 
 	dialCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
