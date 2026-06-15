@@ -23,6 +23,15 @@ import (
 // Default rough estimate: 600 work units per second of input video for ABR ladder.
 const abrUnitsPerInputSecond = 600
 
+// paymentRequiredError turns a LOC credit refusal into a 402 carrying a clear,
+// actionable detail message for the client. The stable machine code
+// (insufficient_credit / spend_cap_exceeded / session_cap_reached) is preserved
+// in the wrapped error chain for clients that branch on it.
+func paymentRequiredError(err error) error {
+	code, msg := loc.CreditError(err)
+	return huma.NewError(http.StatusPaymentRequired, msg, fmt.Errorf("%s: %w", code, err))
+}
+
 func RegisterV1(api huma.API, deps Deps) {
 	registerV1Capabilities(api, deps)
 	registerV1Upload(api, deps)
@@ -294,8 +303,10 @@ func registerV1ABR(api huma.API, deps Deps) {
 					_ = deps.Usage.Refund(ctx, res.ID, 502, err.Error())
 					return nil, huma.Error502BadGateway("no_capable_broker", err)
 				case loc.IsInsufficientCredit(err):
+					deps.Log.Warn("abr: payment required (402)",
+						"req_id", RequestIDFrom(ctx), "capability", spec.Capability, "err", err.Error())
 					_ = deps.Usage.Refund(ctx, res.ID, 402, err.Error())
-					return nil, huma.NewError(http.StatusPaymentRequired, "insufficient_credit", err)
+					return nil, paymentRequiredError(err)
 				default:
 					_ = deps.Usage.Refund(ctx, res.ID, 502, err.Error())
 					return nil, huma.Error502BadGateway("loc_create_job_failed", err)
@@ -936,14 +947,22 @@ func openLiveGatewayIngest(ctx context.Context, deps Deps, ak *repo.APIKey, in *
 			MaxTotalUnits:        deps.Cfg.LiveMaxTotalUnits,
 		})
 		if err != nil {
-			_ = deps.Live.Fail(ctx, live.ID, "loc_open_session_failed")
-			_ = deps.Usage.Refund(ctx, res.ID, 502, err.Error())
 			switch {
 			case loc.IsNoRoute(err):
+				_ = deps.Live.Fail(ctx, live.ID, "loc_open_session_failed")
+				_ = deps.Usage.Refund(ctx, res.ID, 502, err.Error())
 				return nil, huma.Error502BadGateway("no_capable_broker", err)
 			case loc.IsInsufficientCredit(err):
-				return nil, huma.NewError(http.StatusPaymentRequired, "insufficient_credit", err)
+				// Payment refusal, not a backend fault: record the live row and
+				// reservation with 402 (not 502) so status surfaces honestly.
+				deps.Log.Warn("live: payment required (402)",
+					"req_id", RequestIDFrom(ctx), "live_id", live.ID, "err", err.Error())
+				_ = deps.Live.Fail(ctx, live.ID, "insufficient_credit")
+				_ = deps.Usage.Refund(ctx, res.ID, 402, err.Error())
+				return nil, paymentRequiredError(err)
 			default:
+				_ = deps.Live.Fail(ctx, live.ID, "loc_open_session_failed")
+				_ = deps.Usage.Refund(ctx, res.ID, 502, err.Error())
 				return nil, huma.Error502BadGateway("loc_open_session_failed", err)
 			}
 		}

@@ -82,6 +82,35 @@ func IsInsufficientCredit(err error) bool {
 	return codeIs(err, "INSUFFICIENT_CREDIT", "SPEND_CAP_EXCEEDED", "cap_reached")
 }
 
+// CreditError classifies a credit refusal (the family IsInsufficientCredit
+// matches) into a stable client-facing code and an actionable message.
+// Callers gate on IsInsufficientCredit(err) first; for any other error the
+// generic insufficient-credit wording is returned. A Retry-After hint is
+// appended when LOC supplied one.
+func CreditError(err error) (code, message string) {
+	code = "insufficient_credit"
+	message = "Payment required: your prepaid credit balance can't cover this " +
+		"session (reserved = price × runway). Top up your credit balance and retry."
+
+	var ae *APIError
+	if errors.As(err, &ae) {
+		switch {
+		case strings.EqualFold(ae.Code, "SPEND_CAP_EXCEEDED"):
+			code = "spend_cap_exceeded"
+			message = "Payment required: the spend cap for the current period has " +
+				"been reached. Raise the per-period spend cap or wait for the next period."
+		case strings.EqualFold(ae.Code, "cap_reached"):
+			code = "session_cap_reached"
+			message = "Payment required: the session/credit cap has been reached. " +
+				"Raise the cap or wait for it to reset."
+		}
+		if ae.RetryAfter > 0 {
+			message += fmt.Sprintf(" Retry after ~%ds.", int(ae.RetryAfter.Seconds()))
+		}
+	}
+	return code, message
+}
+
 // IsNoRoute reports whether no orchestrator currently advertises the
 // requested capability+offering.
 func IsNoRoute(err error) bool {
