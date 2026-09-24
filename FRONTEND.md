@@ -128,3 +128,17 @@ outlines without an alternative.
 - Build steps that produce bundles in source control.
 - Inline styling.
 - Shadow DOM.
+
+Live session controls are restored from the authenticated portal API after a
+refresh. `/api/portal/live-streams/{id}` returns owner-scoped session details
+with `Cache-Control: no-store`; only the selected session ID is kept in
+sessionStorage, never ingest credentials. Live streams lists Play, Stop and
+Manage together, polls server state, and keeps Stop disabled while termination
+is pending. Browser disconnects do not stop the runner. See beads `vgw-2ac`
+and `vgw-91i` for the implementation and runner lifecycle coordination.
+
+Portal component behavior tests run with `pnpm --filter
+@livepeer-modules-transcode-gateway/portal test` (or `node
+--experimental-vm-modules --test web/portal/tests/*.test.mjs` from the root).
+They exercise component API interactions using a small Lit template stub;
+actual browser playback additionally requires the deployed HTTPS HLS edge.

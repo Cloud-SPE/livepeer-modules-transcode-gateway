@@ -15,6 +15,7 @@ import { api } from '../lib/api.js';
 // when the capability comes back online.
 
 const KEY_STORAGE      = 'lvp_video_api_key';
+const LIVE_SELECTION = 'lvp_live_selection';
 const UPLOADS_STORAGE  = 'lvp_video_uploads';
 const ABR_CAP_NAME     = 'video:transcode.abr';
 const LIVE_CAP_NAME    = 'video:transcode.live';
@@ -32,6 +33,8 @@ class CcPlayground extends LitElement {
 
     // live
     liveSession:      { state: true },
+    liveSessions: { state: true },
+    liveRestoring: { state: true },
     liveBusy:         { state: true },
     livePlaying:      { state: true },
     liveStatusError:  { state: true },
@@ -54,6 +57,9 @@ class CcPlayground extends LitElement {
     this.abrOnline      = false;
     this.liveOnline     = false;
     this.liveSession    = null;
+    this.liveSessions = [];
+    this.liveRestoring = true;
+    this._livePortal = false;
     this.liveBusy       = false;
     this.livePlaying    = false;
     this.liveStatusError = "";
@@ -74,7 +80,7 @@ class CcPlayground extends LitElement {
 
   async connectedCallback() {
     super.connectedCallback();
-    await this.#loadCaps();
+    await Promise.all([this.#loadCaps(), this.#restoreLive()]);
     if (!this.isConnected) return;
     if (this.liveSession && !isLiveTerminal(this.liveSession)) this.#startLivePoll();
     // Resume polling any uploads that have a running job.
@@ -121,7 +127,7 @@ class CcPlayground extends LitElement {
             Transcode ${this.#tabBadge(this.abrOnline)}
           </button>
         </div>
-        ${this.activeTab === 'live' ? this.#renderLive() : this.#renderTranscode()}
+        ${this.activeTab === 'live' ? html`${this.#renderLiveSelection()}${this.#renderLive()}` : this.#renderTranscode()}
       </div>
     `;
   }
@@ -134,8 +140,59 @@ class CcPlayground extends LitElement {
   }
 
   // ── Live tab ──
+  #renderLiveSelection() {
+    if (!this.liveSessions.length) return '';
+    return html`<label for="live-session-select">Your active streams</label>
+      <select id="live-session-select" ?disabled=${this.liveBusy || this.liveRestoring}
+        @change=${(e) => this.#selectLive(e.target.value)}>
+        <option value="">Select a stream</option>
+        ${this.liveSessions.map(s => html`<option value=${s.id} ?selected=${s.id === this.liveSession?.id}>${s.name || s.id} — ${s.status}</option>`)}
+      </select>`;
+  }
+
+  async #restoreLive() {
+    this.liveRestoring = true;
+    try {
+      const data = await api('/portal/live-streams?limit=500');
+      if (!this.isConnected) return;
+      this.liveSessions = (data?.items || []).filter(s => !isLiveTerminal(s));
+      const selected = sessionStorage.getItem(LIVE_SELECTION);
+      const session = this.liveSessions.find(s => s.id === selected) || this.liveSessions[0];
+      if (!this.liveSession && session) await this.#selectLive(session.id);
+    } catch (err) {
+      if (this.isConnected) this.liveStatusError = `Could not restore streams: ${err.message}`;
+    } finally {
+      this.liveRestoring = false;
+    }
+  }
+
+  async #selectLive(id) {
+    if (!id || this.liveBusy) return;
+    this.liveBusy = true;
+    this.#stopLivePoll();
+    const generation = this._livePollGeneration;
+    try {
+      const data = await api(`/portal/live-streams/${encodeURIComponent(id)}`);
+      if (!this.isConnected || generation !== this._livePollGeneration) return;
+      if (data?.session?.id !== id) throw new Error('Unexpected stream response');
+      this.#tearDownHls();
+      this.livePlaying = false;
+      this._livePortal = true;
+      this.liveSession = data.session;
+      this.liveStatusError = '';
+      sessionStorage.setItem(LIVE_SELECTION, id);
+    } catch (err) {
+      if (this.isConnected) this.liveStatusError = err.message;
+    } finally {
+      this.liveBusy = false;
+      this.#startLivePoll();
+    }
+  }
+
   #renderLive() {
+    if (this.liveRestoring) return html`<p class="msg">Restoring your streams…</p>`;
     if (!this.liveSession) {
+      if (this.liveStatusError) return html`<p class="msg warn">${this.liveStatusError}</p><button @click=${() => this.#restoreLive()}>Retry restoring streams</button>`;
       if (this.capsLoading) return html`<p class="msg">Checking network…</p>`;
       if (!this.liveOnline) return this.#renderOfflineNotice(LIVE_CAP_NAME, 'Live RTMP→HLS streaming');
       if (!this.apiKey) return html`<p class="msg">Paste an API key above to use the live playground.</p>`;
@@ -201,7 +258,9 @@ Stream Key: ${s.ingest.stream_key}</pre>
       });
       if (!data?.session?.id) throw new Error('Stream response did not include a session ID. Retry to recover it.');
       if (this.apiKey !== key) return;
+      this._livePortal = false;
       this.liveSession = data.session;
+      sessionStorage.setItem(LIVE_SELECTION, data.session.id);
       this.#startLivePoll();
     } catch (err) {
       this.error = err.message;
@@ -226,7 +285,7 @@ Stream Key: ${s.ingest.stream_key}</pre>
     const poll = async () => {
       if (!current()) return;
       try {
-        const data = await api(`/v1/live/${sessionID}`, { headers: { Authorization: `Bearer ${key}` } });
+        const data = await api(this._livePortal ? `/portal/live-streams/${sessionID}` : `/v1/live/${sessionID}`, this._livePortal ? {} : { headers: { Authorization: `Bearer ${key}` } });
         if (!current()) return;
         if (data?.session?.id !== sessionID) throw new Error('Unexpected stream status response');
         const previous = this.liveSession;
@@ -257,6 +316,8 @@ Stream Key: ${s.ingest.stream_key}</pre>
     if (!isLiveTerminal(this.liveSession)) return;
     this.#stopLivePoll();
     this.#tearDownHls();
+    this.liveSessions = this.liveSessions.filter(s => s.id !== this.liveSession?.id);
+    sessionStorage.removeItem(LIVE_SELECTION);
     this.liveSession = null;
     this._liveCreateKey = '';
     this.livePlaying = false;
@@ -277,8 +338,8 @@ Stream Key: ${s.ingest.stream_key}</pre>
     this.error = '';
     this.#stopLivePoll();
     try {
-      await api(`/v1/live/${sessionID}`, {
-        method: 'DELETE', headers: { Authorization: `Bearer ${this.apiKey}` },
+      await api(this._livePortal ? `/portal/live-streams/${sessionID}` : `/v1/live/${sessionID}`, {
+        method: 'DELETE', headers: this._livePortal ? {} : { Authorization: `Bearer ${this.apiKey}` },
       });
       if (this.liveSession?.id !== sessionID) return;
       this.liveSession = { ...this.liveSession, status: 'ending' };

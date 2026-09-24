@@ -7,6 +7,6 @@
     "dev": "node dev-server.js",
     "lint": "echo 'no build step — zero-build Lit + esm.sh'",
     "build": "echo 'no build step — zero-build Lit + esm.sh'",
-    "test": "echo 'no tests'"
+    "test": "node --experimental-vm-modules --test tests/*.test.mjs"
   }
 }

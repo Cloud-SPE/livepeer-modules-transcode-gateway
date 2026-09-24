@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strings"
 	"time"
@@ -14,6 +15,8 @@ import (
 )
 
 func RegisterPortal(api huma.API, deps Deps) {
+	registerPortalLiveStop(api, deps)
+	registerPortalLiveGet(api, deps)
 	huma.Register(api, huma.Operation{
 		OperationID: "portal-login",
 		Method:      http.MethodPost,
@@ -148,10 +151,10 @@ func RegisterPortal(api huma.API, deps Deps) {
 		out := &PortalMintKeyOut{}
 		out.Body.Plaintext = key
 		out.Body.Key = APIKeyView{
-			ID:         ak.ID,
-			Label:      in.Body.Label,
-			KeyPrefix:  ak.KeyPrefix,
-			CreatedAt:  ak.CreatedAt,
+			ID:        ak.ID,
+			Label:     in.Body.Label,
+			KeyPrefix: ak.KeyPrefix,
+			CreatedAt: ak.CreatedAt,
 		}
 		return out, nil
 	})
@@ -229,12 +232,30 @@ func RegisterPortal(api huma.API, deps Deps) {
 		if err != nil {
 			return nil, huma.Error500InternalServerError("live list", err)
 		}
+		ids := make([]uuid.UUID, 0, len(recs))
+		for _, r := range recs {
+			ids = append(ids, r.ID)
+		}
+		operations, err := repo.NewOperationRepo(deps.Pool).PublicViews(ctx, ids)
+		if err != nil {
+			return nil, huma.Error500InternalServerError("live operation list", err)
+		}
 		out := &PortalLiveStreamsOut{}
 		for _, r := range recs {
+			status := string(r.Status)
+			var public operationView
+			if op := operations[r.ID]; op != nil {
+				_ = json.Unmarshal(op.PublicJSON, &public)
+			}
+			if op := operations[r.ID]; op != nil && op.StopRequested && op.FinishedAt == nil {
+				status = "ending"
+			}
 			out.Body.Items = append(out.Body.Items, PortalLiveStreamView{
 				ID:          r.ID,
 				Name:        derefString(r.Name),
-				Status:      string(r.Status),
+				Status:      status,
+				OutputState: public.OutputState,
+				CloseReason: public.CloseReason,
 				PlaybackURL: derefString(r.PlaybackURL),
 				ErrorText:   derefString(r.ErrorText),
 				CreatedAt:   r.CreatedAt,
@@ -285,6 +306,8 @@ func RegisterPortal(api huma.API, deps Deps) {
 }
 
 type PortalLiveStreamView struct {
+	OutputState string     `json:"output_state,omitempty"`
+	CloseReason string     `json:"close_reason,omitempty"`
 	ID          uuid.UUID  `json:"id"`
 	Name        string     `json:"name,omitempty"`
 	Status      string     `json:"status"`
@@ -416,4 +439,63 @@ func clearedCookieHeaderValue(deps Deps) string {
 func sessionFromCtx(ctx context.Context) *repo.UserSession {
 	v, _ := ctx.Value(ctxKeySession).(*repo.UserSession)
 	return v
+}
+
+// The portal uses its HttpOnly session cookie; raw API keys are not needed to stop.
+func registerPortalLiveStop(api huma.API, deps Deps) {
+	huma.Register(api, huma.Operation{
+		OperationID: "portal-live-stop", Method: http.MethodDelete,
+		Path: "/api/portal/live-streams/{id}", DefaultStatus: http.StatusAccepted,
+		Summary: "Request termination and settlement of my live session", Tags: []string{"portal"},
+	}, func(ctx context.Context, in *struct {
+		ID uuid.UUID `path:"id"`
+	}) (*GenericOK, error) {
+		ak := APIKeyFromCtx(ctx)
+		if ak == nil {
+			return nil, huma.Error401Unauthorized("not_authenticated")
+		}
+		if deps.Paid == nil {
+			return nil, huma.Error503ServiceUnavailable("loc_unavailable")
+		}
+		if err := deps.Paid.StopLive(ctx, in.ID, ak.ID); err != nil {
+			return nil, err
+		}
+		out := &GenericOK{}
+		out.Body.OK = true
+		return out, nil
+	})
+}
+
+// An authenticated owner can recover ingest credentials without storing them in
+// browser storage. The response must not be cached by browsers or proxies.
+func registerPortalLiveGet(api huma.API, deps Deps) {
+	huma.Register(api, huma.Operation{
+		OperationID: "portal-live-stream", Method: http.MethodGet,
+		Path:    "/api/portal/live-streams/{id}",
+		Summary: "Recover my live session controls and ingest credentials", Tags: []string{"portal"},
+	}, func(ctx context.Context, in *struct {
+		ID uuid.UUID `path:"id"`
+	}) (*PortalLiveSessionOut, error) {
+		key := APIKeyFromCtx(ctx)
+		if key == nil {
+			return nil, huma.Error401Unauthorized("not_authenticated")
+		}
+		if deps.Paid == nil {
+			return nil, huma.Error503ServiceUnavailable("live_unavailable")
+		}
+		view, err := deps.Paid.ViewLive(ctx, in.ID, key.ID, true)
+		if err != nil {
+			return nil, err
+		}
+		out := &PortalLiveSessionOut{CacheControl: "no-store"}
+		out.Body.Session = view.Body.Session
+		return out, nil
+	})
+}
+
+type PortalLiveSessionOut struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         struct {
+		Session LiveSessionView `json:"session"`
+	}
 }

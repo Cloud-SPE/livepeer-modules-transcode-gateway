@@ -40,7 +40,7 @@ func NewOperationRepo(pool *pgxpool.Pool) *OperationRepo { return &OperationRepo
 
 // PublicViews excludes encrypted credentials and request material from listings.
 func (r *OperationRepo) PublicViews(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]*PaidOperation, error) {
-	rows, err := r.pool.Query(ctx, `SELECT id,state,public_json FROM paid_operations WHERE id=ANY($1::uuid[])`, ids)
+	rows, err := r.pool.Query(ctx, `SELECT id,state,public_json,stop_requested,finished_at FROM paid_operations WHERE id=ANY($1::uuid[])`, ids)
 	if err != nil {
 		return nil, err
 	}
@@ -48,7 +48,7 @@ func (r *OperationRepo) PublicViews(ctx context.Context, ids []uuid.UUID) (map[u
 	out := make(map[uuid.UUID]*PaidOperation)
 	for rows.Next() {
 		o := new(PaidOperation)
-		if err := rows.Scan(&o.ID, &o.State, &o.PublicJSON); err != nil {
+		if err := rows.Scan(&o.ID, &o.State, &o.PublicJSON, &o.StopRequested, &o.FinishedAt); err != nil {
 			return nil, err
 		}
 		out[o.ID] = o
