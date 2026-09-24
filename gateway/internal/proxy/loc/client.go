@@ -1,13 +1,7 @@
-// Package loc is the gateway's HTTP client for the Livepeer Open
-// Clearinghouse (LOC). LOC fronts the service-registry and payment
-// daemons behind a jobs/sessions API: the gateway asks LOC to mint a
-// payment (LOC also picks the route), attaches the returned envelope to
-// its own broker call, then settles actual work units back to LOC.
-//
-// Wire contract source of truth: basic-pymnthouse
-// src/livepeer_open_clearinghouse/domains/{jobs,sessions,discovery}.
-// Conventions here mirror proxy/livepeer's doJSON so error handling
-// stays consistent across upstream clients.
+// Package loc talks to the Livepeer Open Clearinghouse. LOC selects a route
+// and issues a workload-scoped spend authorization; the gateway invokes the
+// broker directly and forwards signed terminal accounting evidence to LOC.
+// v2.go carries the current contract. Issuance uses persisted idempotency keys.
 package loc
 
 import (
@@ -43,7 +37,7 @@ func NewClient(baseURL, apiKey, sdkID string, timeout time.Duration) *Client {
 		timeout = 30 * time.Second
 	}
 	return &Client{
-		httpc:   &http.Client{Timeout: timeout},
+		httpc:   &http.Client{Timeout: timeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
 		baseURL: strings.TrimRight(baseURL, "/"),
 		apiKey:  apiKey,
 		sdkID:   sdkID,
@@ -54,6 +48,10 @@ func NewClient(baseURL, apiKey, sdkID string, timeout time.Duration) *Client {
 // envelope {"error":{code,message,details}} into *APIError (falling
 // back to the raw body when the envelope doesn't parse).
 func (c *Client) doJSON(ctx context.Context, method, path string, body, out any) error {
+	return c.doJSONHeaders(ctx, method, path, body, out, nil)
+}
+
+func (c *Client) doJSONHeaders(ctx context.Context, method, path string, body, out any, headers http.Header) error {
 	var reqBody io.Reader
 	if body != nil {
 		buf, err := json.Marshal(body)
@@ -69,6 +67,9 @@ func (c *Client) doJSON(ctx context.Context, method, path string, body, out any)
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	for key, values := range headers {
+		req.Header[key] = values
+	}
 	req.Header.Set("X-API-Key", c.apiKey)
 	if c.sdkID != "" {
 		req.Header.Set("Livepeer-Open-Clearinghouse-SDK", c.sdkID)
@@ -78,11 +79,11 @@ func (c *Client) doJSON(ctx context.Context, method, path string, body, out any)
 		return err
 	}
 	defer resp.Body.Close()
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if err != nil {
 		return err
 	}
-	if resp.StatusCode >= 400 {
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return parseAPIError(resp.StatusCode, resp.Header.Get("Retry-After"), respBody)
 	}
 	if out != nil && len(respBody) > 0 {
@@ -96,13 +97,9 @@ func (c *Client) doJSON(ctx context.Context, method, path string, body, out any)
 	return nil
 }
 
-// doJSONRetry wraps doJSON with the settle-path retry policy: up to
-// `attempts` total tries on 429/5xx/transport errors, honoring
-// Retry-After, with capped exponential backoff. NEVER use this for
-// create/open calls — LOC has no idempotency keys on jobs/sessions, so
-// a retried create can double-encumber credit. Settle/close/refill are
-// safe: a duplicate settle returns 409 job_already_settled, which
-// callers treat as success.
+// doJSONRetry retries idempotent accounting operations on 429/5xx/transport
+// failures. Issuance/revision retries are owned by the durable operation worker,
+// which reuses the original request body and Idempotency-Key.
 func (c *Client) doJSONRetry(ctx context.Context, method, path string, body, out any, attempts int) error {
 	backoff := 200 * time.Millisecond
 	var err error

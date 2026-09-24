@@ -1,7 +1,7 @@
 # Livepeer Video Gateway — root Makefile
 #
 # Root targets for the Go gateway, the three Lit SPAs, and the
-# compose stack (db + minio + livepeer daemons).
+# compose stack (db + minio; LOC and Modules are external).
 
 .DEFAULT_GOAL := help
 
@@ -11,7 +11,7 @@
 # multi-arch buildx, pushed to tztcloud/* on Docker Hub. Authenticate
 # first with `docker login docker.io -u <your-dockerhub-username>`.
 IMAGE ?= tztcloud/livepeer-video-gateway
-TAG   ?= v1.4.1
+TAG   ?= v2-local
 
 .PHONY: help install build lint test dev down logs clean smoke web site-ui portal-ui admin-ui \
         go-build go-test go-lint go-tidy sqlc \
@@ -41,9 +41,9 @@ help:
 	@echo "  make go-tidy        go mod tidy"
 	@echo "  make sqlc           regenerate sqlc queries into gateway/gen/db/"
 	@echo ""
-	@echo "  make docker-build TAG=v1.4.1"
+	@echo "  make docker-build TAG=v2-local"
 	@echo "                      build the gateway image as tztcloud/livepeer-video-gateway:<TAG>"
-	@echo "  make docker-publish TAG=v1.4.1"
+	@echo "  make docker-publish TAG=v2.0.0"
 	@echo "                      build multi-arch + push to tztcloud/* on Docker Hub"
 	@echo "                      (requires \`docker login docker.io\` first)"
 	@echo ""
@@ -132,18 +132,18 @@ clean:
 
 # ── Docker image: build + publish ───────────────────────────────────
 # docker-build: single-arch (host's arch) for quick local testing.
-#   make docker-build TAG=v1.4.1
+#   make docker-build TAG=v2-local
 # docker-publish: multi-arch (linux/amd64 + linux/arm64), pushed.
-#   make docker-publish TAG=v1.4.1
-# Requires `docker login docker.io` first; refuses to push :dev.
+#   make docker-publish TAG=v2.0.0
+# Requires `docker login docker.io` first; refuses to push local development tags.
 
 docker-build:
 	docker build -t $(IMAGE):$(TAG) -f gateway/Dockerfile .
 	@echo "built $(IMAGE):$(TAG)"
 
 docker-publish:
-	@if [ "$(TAG)" = "dev" ]; then \
-		echo "refusing to publish :dev — set TAG (e.g. make docker-publish TAG=v1.4.1)"; \
+	@if [ "$(TAG)" = "dev" ] || [ "$(TAG)" = "v2-local" ]; then \
+		echo "refusing to publish a local tag — set an explicit release TAG"; \
 		exit 1; \
 	fi
 	@# Default Docker driver doesn't support multi-arch — ensure a

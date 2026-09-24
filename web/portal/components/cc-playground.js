@@ -15,6 +15,7 @@ import { api } from '../lib/api.js';
 // when the capability comes back online.
 
 const KEY_STORAGE      = 'lvp_video_api_key';
+const LIVE_SELECTION = 'lvp_live_selection';
 const UPLOADS_STORAGE  = 'lvp_video_uploads';
 const ABR_CAP_NAME     = 'video:transcode.abr';
 const LIVE_CAP_NAME    = 'video:transcode.live';
@@ -32,8 +33,11 @@ class CcPlayground extends LitElement {
 
     // live
     liveSession:      { state: true },
+    liveSessions: { state: true },
+    liveRestoring: { state: true },
     liveBusy:         { state: true },
     livePlaying:      { state: true },
+    liveStatusError:  { state: true },
 
     // transcode (VOD ABR)
     uploads:          { state: true },
@@ -53,8 +57,15 @@ class CcPlayground extends LitElement {
     this.abrOnline      = false;
     this.liveOnline     = false;
     this.liveSession    = null;
+    this.liveSessions = [];
+    this.liveRestoring = true;
+    this._livePortal = false;
     this.liveBusy       = false;
     this.livePlaying    = false;
+    this.liveStatusError = "";
+    this._livePoller = null;
+    this._livePollGeneration = 0;
+    this._liveCreateKey = "";
     this.uploads        = readUploads();
     this.activeUploadID = '';
     this.uploading      = false;
@@ -69,7 +80,9 @@ class CcPlayground extends LitElement {
 
   async connectedCallback() {
     super.connectedCallback();
-    await this.#loadCaps();
+    await Promise.all([this.#loadCaps(), this.#restoreLive()]);
+    if (!this.isConnected) return;
+    if (this.liveSession && !isLiveTerminal(this.liveSession)) this.#startLivePoll();
     // Resume polling any uploads that have a running job.
     for (const u of this.uploads) {
       if (u.job && u.job.id && u.job.status !== 'succeeded' && u.job.status !== 'failed') {
@@ -81,6 +94,7 @@ class CcPlayground extends LitElement {
   disconnectedCallback() {
     super.disconnectedCallback();
     this.#tearDownHls();
+    this.#stopLivePoll();
     for (const id of this._pollers.values()) clearInterval(id);
     this._pollers.clear();
   }
@@ -113,7 +127,7 @@ class CcPlayground extends LitElement {
             Transcode ${this.#tabBadge(this.abrOnline)}
           </button>
         </div>
-        ${this.activeTab === 'live' ? this.#renderLive() : this.#renderTranscode()}
+        ${this.activeTab === 'live' ? html`${this.#renderLiveSelection()}${this.#renderLive()}` : this.#renderTranscode()}
       </div>
     `;
   }
@@ -126,64 +140,128 @@ class CcPlayground extends LitElement {
   }
 
   // ── Live tab ──
-  #renderLive() {
-    if (this.capsLoading) return html`<p class="msg">Checking network…</p>`;
-    if (!this.liveOnline) return this.#renderOfflineNotice(LIVE_CAP_NAME, 'Live RTMP→HLS streaming');
-    if (!this.apiKey)     return html`<p class="msg">Paste an API key above to use the live playground.</p>`;
+  #renderLiveSelection() {
+    if (!this.liveSessions.length) return '';
+    return html`<label for="live-session-select">Your active streams</label>
+      <select id="live-session-select" ?disabled=${this.liveBusy || this.liveRestoring}
+        @change=${(e) => this.#selectLive(e.target.value)}>
+        <option value="">Select a stream</option>
+        ${this.liveSessions.map(s => html`<option value=${s.id} ?selected=${s.id === this.liveSession?.id}>${s.name || s.id} — ${s.status}</option>`)}
+      </select>`;
+  }
 
+  async #restoreLive() {
+    this.liveRestoring = true;
+    try {
+      const data = await api('/portal/live-streams?limit=500');
+      if (!this.isConnected) return;
+      this.liveSessions = (data?.items || []).filter(s => !isLiveTerminal(s));
+      const selected = sessionStorage.getItem(LIVE_SELECTION);
+      const session = this.liveSessions.find(s => s.id === selected) || this.liveSessions[0];
+      if (!this.liveSession && session) await this.#selectLive(session.id);
+    } catch (err) {
+      if (this.isConnected) this.liveStatusError = `Could not restore streams: ${err.message}`;
+    } finally {
+      this.liveRestoring = false;
+    }
+  }
+
+  async #selectLive(id) {
+    if (!id || this.liveBusy) return;
+    this.liveBusy = true;
+    this.#stopLivePoll();
+    const generation = this._livePollGeneration;
+    try {
+      const data = await api(`/portal/live-streams/${encodeURIComponent(id)}`);
+      if (!this.isConnected || generation !== this._livePollGeneration) return;
+      if (data?.session?.id !== id) throw new Error('Unexpected stream response');
+      this.#tearDownHls();
+      this.livePlaying = false;
+      this._livePortal = true;
+      this.liveSession = data.session;
+      this.liveStatusError = '';
+      sessionStorage.setItem(LIVE_SELECTION, id);
+    } catch (err) {
+      if (this.isConnected) this.liveStatusError = err.message;
+    } finally {
+      this.liveBusy = false;
+      this.#startLivePoll();
+    }
+  }
+
+  #renderLive() {
+    if (this.liveRestoring) return html`<p class="msg">Restoring your streams…</p>`;
     if (!this.liveSession) {
+      if (this.liveStatusError) return html`<p class="msg warn">${this.liveStatusError}</p><button @click=${() => this.#restoreLive()}>Retry restoring streams</button>`;
+      if (this.capsLoading) return html`<p class="msg">Checking network…</p>`;
+      if (!this.liveOnline) return this.#renderOfflineNotice(LIVE_CAP_NAME, 'Live RTMP→HLS streaming');
+      if (!this.apiKey) return html`<p class="msg">Paste an API key above to use the live playground.</p>`;
       return html`
-        <p class="msg">Allocate an RTMP ingest + HLS egress session. Push to the
-          returned URL with OBS or <code>ffmpeg</code>; playback appears below
-          when ingest is detected.</p>
+        <p class="msg">Create a stream, then publish with OBS or <code>ffmpeg</code>
+          once the ingest details are ready.</p>
         <button class="primary" ?disabled=${this.liveBusy} @click=${this.#createLive}>
-          ${this.liveBusy ? 'Allocating…' : 'Create stream'}
-        </button>
-      `;
+          ${this.liveBusy ? 'Allocating…' : this._liveCreateKey ? 'Retry stream creation' : 'Create stream'}
+        </button>`;
     }
     const s = this.liveSession;
+    const terminal = isLiveTerminal(s);
+    const ending = s.status === 'ending';
+    const ready = !terminal && !ending && s.status !== 'provisioning' && s.ingest?.rtmp_url && s.ingest?.stream_key;
     return html`
       <p><strong>Stream ID:</strong> <code>${s.id}</code></p>
-      <p><strong>Status:</strong> ${s.status}</p>
-      <p><strong>Ingest URL:</strong> <code>${s.ingest.rtmp_url}</code></p>
-      <p><strong>Stream key:</strong> <code>${s.ingest.stream_key}</code>
-        <span class="msg">(one-time)</span></p>
-      <details>
-        <summary>OBS hint</summary>
-        <pre class="key">Settings → Stream → Service: Custom
+      <p role="status"><strong>Status:</strong> ${s.status || 'provisioning'}
+        ${s.output_state ? html` · Output: ${s.output_state}` : ''}</p>
+      ${this.liveStatusError ? html`<p class="msg warn">${this.liveStatusError}</p>` : ''}
+      ${s.last_failure_code || s.close_reason
+        ? html`<p class="msg">${s.last_failure_code || s.close_reason}</p>` : ''}
+      ${terminal
+        ? html`<p class="msg">${s.status === 'failed' ? 'This stream failed.' : 'This stream has ended.'}</p>
+            <button class="primary" @click=${this.#resetLive}>Create another stream</button>`
+        : html`
+          ${ready ? html`
+            <p><strong>Ingest URL:</strong> <code>${s.ingest.rtmp_url}</code></p>
+            <p><strong>Stream key:</strong> <code>${s.ingest.stream_key}</code></p>
+            <details><summary>OBS hint</summary>
+              <pre class="key">Settings → Stream → Service: Custom
 Server: ${s.ingest.rtmp_url}
 Stream Key: ${s.ingest.stream_key}</pre>
-      </details>
-      <p><strong>Playback:</strong> <code>${s.playback.hls_url}</code></p>
-      <video controls muted></video>
-      <div style="display:flex; gap:8px; margin-top:8px">
-        <button class="ghost" @click=${this.#playLive} ?disabled=${this.livePlaying}>
-          ${this.livePlaying ? 'Loaded — use video controls' : '▶ Load preview'}
-        </button>
-        <button class="ghost danger" @click=${this.#stopLive}>Stop stream</button>
-      </div>
-      <p class="msg" style="margin-top:8px">
-        Click <strong>Load preview</strong> once your encoder is actually
-        publishing — the playlist isn't written until media starts flowing.
-      </p>
+            </details>`
+            : html`<p class="msg">${ending ? 'Stopping the stream and finalizing usage…' : 'Preparing your stream. Ingest details will appear when it is ready.'}</p>`}
+          ${s.playback?.hls_url && !ending ? html`
+            <p><strong>Playback:</strong> <code>${s.playback.hls_url}</code></p>
+            <video controls muted></video>
+            <button class="ghost" @click=${this.#playLive} ?disabled=${this.livePlaying}>
+              ${this.livePlaying ? 'Loaded — use video controls' : '▶ Load preview'}
+            </button>
+            <p class="msg">Load the preview once your encoder is publishing.</p>` : ''}
+          <button class="ghost danger" @click=${this.#stopLive} ?disabled=${this.liveBusy || ending}>
+            ${this.liveBusy || ending ? 'Stopping…' : 'Stop stream'}
+          </button>`}
     `;
   }
 
   async #createLive() {
-    this.liveBusy = true; this.error = '';
+    if (this.liveBusy || this.liveSession || !this.apiKey) return;
+    this.liveBusy = true;
+    this.error = '';
     this.livePlaying = false;
+    this.liveStatusError = '';
     this.#tearDownHls();
+    const key = this.apiKey;
+    // Keep the key after a lost response so retry recovers the same paid session.
+    this._liveCreateKey ||= crypto.randomUUID();
     try {
       const data = await api('/v1/live', {
         method: 'POST',
-        headers: { Authorization: `Bearer ${this.apiKey}` },
+        headers: { Authorization: `Bearer ${key}`, 'Idempotency-Key': this._liveCreateKey },
         body: { name: 'playground' },
       });
+      if (!data?.session?.id) throw new Error('Stream response did not include a session ID. Retry to recover it.');
+      if (this.apiKey !== key) return;
+      this._livePortal = false;
       this.liveSession = data.session;
-      // Don't auto-attach hls.js — the master.m3u8 doesn't exist until
-      // the customer's encoder has been pushing for a few seconds AND
-      // the runner has uploaded the first segments. Wait for the user
-      // to click "Load preview" so we don't spam 404 retries.
+      sessionStorage.setItem(LIVE_SELECTION, data.session.id);
+      this.#startLivePoll();
     } catch (err) {
       this.error = err.message;
     } finally {
@@ -191,25 +269,87 @@ Stream Key: ${s.ingest.stream_key}</pre>
     }
   }
 
+  #stopLivePoll() {
+    clearTimeout(this._livePoller);
+    this._livePoller = null;
+    this._livePollGeneration++;
+  }
+
+  #startLivePoll() {
+    this.#stopLivePoll();
+    if (!this.isConnected || !this.liveSession?.id || isLiveTerminal(this.liveSession)) return;
+    const sessionID = this.liveSession.id;
+    const key = this.apiKey;
+    const generation = this._livePollGeneration;
+    const current = () => this.isConnected && generation === this._livePollGeneration && this.liveSession?.id === sessionID && this.apiKey === key;
+    const poll = async () => {
+      if (!current()) return;
+      try {
+        const data = await api(this._livePortal ? `/portal/live-streams/${sessionID}` : `/v1/live/${sessionID}`, this._livePortal ? {} : { headers: { Authorization: `Bearer ${key}` } });
+        if (!current()) return;
+        if (data?.session?.id !== sessionID) throw new Error('Unexpected stream status response');
+        const previous = this.liveSession;
+        this.liveSession = {
+          ...previous, ...data.session,
+          // GET deliberately omits the secret issued by create.
+          ingest: { ...previous.ingest, ...data.session.ingest,
+            stream_key: data.session.ingest?.stream_key || previous.ingest?.stream_key },
+          playback: { ...previous.playback, ...data.session.playback },
+        };
+        this.liveStatusError = '';
+        if (isLiveTerminal(this.liveSession)) {
+          this.#stopLivePoll();
+          this.#tearDownHls();
+          this.livePlaying = false;
+          return;
+        }
+      } catch (err) {
+        if (!current()) return;
+        this.liveStatusError = `Status refresh failed; retrying: ${err.message}`;
+      }
+      if (current()) this._livePoller = setTimeout(poll, 3000);
+    };
+    this._livePoller = setTimeout(poll, 0);
+  }
+
+  #resetLive = () => {
+    if (!isLiveTerminal(this.liveSession)) return;
+    this.#stopLivePoll();
+    this.#tearDownHls();
+    this.liveSessions = this.liveSessions.filter(s => s.id !== this.liveSession?.id);
+    sessionStorage.removeItem(LIVE_SELECTION);
+    this.liveSession = null;
+    this._liveCreateKey = '';
+    this.livePlaying = false;
+    this.liveStatusError = '';
+    this.error = '';
+  };
+
   #playLive = () => {
-    if (!this.liveSession?.playback?.hls_url) return;
+    if (!this.liveSession?.playback?.hls_url || isLiveTerminal(this.liveSession)) return;
     this.#attachHls(this.liveSession.playback.hls_url);
     this.livePlaying = true;
   };
 
   async #stopLive() {
-    if (!this.liveSession) return;
+    if (!this.liveSession || this.liveBusy || isLiveTerminal(this.liveSession)) return;
+    const sessionID = this.liveSession.id;
+    this.liveBusy = true;
+    this.error = '';
+    this.#stopLivePoll();
     try {
-      await api(`/v1/live/${this.liveSession.id}`, {
-        method: 'DELETE',
-        headers: { Authorization: `Bearer ${this.apiKey}` },
+      await api(this._livePortal ? `/portal/live-streams/${sessionID}` : `/v1/live/${sessionID}`, {
+        method: 'DELETE', headers: this._livePortal ? {} : { Authorization: `Bearer ${this.apiKey}` },
       });
-    } catch (err) {
-      this.error = err.message;
-    } finally {
+      if (this.liveSession?.id !== sessionID) return;
+      this.liveSession = { ...this.liveSession, status: 'ending' };
       this.#tearDownHls();
-      this.liveSession = null;
       this.livePlaying = false;
+    } catch (err) {
+      this.error = `Stop failed; the stream is still tracked. Retry stopping: ${err.message}`;
+    } finally {
+      this.liveBusy = false;
+      this.#startLivePoll();
     }
   }
 
@@ -263,6 +403,7 @@ Stream Key: ${s.ingest.stream_key}</pre>
     const status = u.job?.status || 'not submitted';
     const done   = status === 'succeeded';
     const failed = status === 'failed';
+    const rejected = status === 'admission_rejected';
     const errCode = u.job?.error_code || '';
     const errText = u.job?.error || '';
     const masterURL = u.job?.master_playlist_url || '';
@@ -276,7 +417,7 @@ Stream Key: ${s.ingest.stream_key}</pre>
       </td>
       <td>${new Date(u.uploaded_at).toLocaleString()}</td>
       <td>${u.job?.id ? html`<code>${u.job.id.slice(0, 8)}…</code>` : html`<span class="msg">—</span>`}</td>
-      <td><span class="pill ${done ? 'ok' : failed ? 'warn' : ''}">${status}</span></td>
+      <td><span class="pill ${done ? 'ok' : failed || rejected ? 'warn' : ''}">${rejected ? 'Settlement pending' : status}</span></td>
       <td>
         ${done && masterURL
           ? html`<button class="ghost" @click=${() => this.#play(u.id)}>Play</button>
@@ -290,7 +431,7 @@ Stream Key: ${s.ingest.stream_key}</pre>
                    ${expanded ? '▾' : '▸'} ${renditions.length} variants
                  </button>`
           : ''}
-        ${this.abrOnline && !done
+        ${this.abrOnline && (failed || status === 'not submitted')
           ? html`<button class="primary" @click=${() => this.#submitJob(u.id)}>
               ${status === 'not submitted' ? 'Transcode' : 'Retry'}
             </button>`
@@ -298,7 +439,7 @@ Stream Key: ${s.ingest.stream_key}</pre>
         <button class="ghost danger" @click=${() => this.#removeUpload(u.id)}>Delete</button>
       </td>
     </tr>
-    ${failed
+    ${failed || rejected
       ? html`<tr class="error-row"><td colspan="5">
           ${errCode ? html`<code>${errCode}</code>` : ''}
           ${errCode && errText ? html`<br>` : ''}
@@ -377,10 +518,8 @@ Stream Key: ${s.ingest.stream_key}</pre>
     if (!this.apiKey) { this.error = 'API key required'; return; }
     this.error = ''; this.uploading = true; this.uploadPct = 0;
     try {
-      // Probe the video's duration first so the gateway can size the
-      // payment to the actual workload (work_unit = seconds for live,
-      // jobs for VOD ABR — but we still pass an estimate so the
-      // payer-daemon mints a face value proportional to the work).
+      // Duration sizes the authorization cap; the runner settles measured
+      // delivered frame-megapixels after transcoding.
       const durationSeconds = await this.#probeDuration(file);
       const presign = await api('/v1/abr/upload-url', {
         method: 'POST',
@@ -443,8 +582,14 @@ Stream Key: ${s.ingest.stream_key}</pre>
 
   async #submitJob(uploadId) {
     const u = this.uploads.find((x) => x.id === uploadId);
-    if (!u) return;
+    if (!u || !this.apiKey || (u.job && !['failed', 'not submitted'].includes(u.job.status))) return;
     this.error = '';
+    if (this._pollers.has(uploadId)) {
+      clearInterval(this._pollers.get(uploadId));
+      this._pollers.delete(uploadId);
+    }
+    const requestKey = (u.job?.id || !u.request_key) ? crypto.randomUUID() : u.request_key;
+    this.#updateUpload(uploadId, { request_key: requestKey, job: { status: 'submitting' } });
     try {
       const body = {
         input_url: u.object_url,
@@ -455,14 +600,15 @@ Stream Key: ${s.ingest.stream_key}</pre>
       }
       const r = await api('/v1/abr', {
         method: 'POST',
-        headers: { Authorization: `Bearer ${this.apiKey}` },
+        headers: { Authorization: `Bearer ${this.apiKey}`, 'Idempotency-Key': requestKey },
         body,
       });
+      if (!r?.job?.id) throw new Error('Missing job ID. Retry to recover the submission.');
       this.#updateUpload(uploadId, { job: { ...r.job, status: r.job.status || 'running' } });
       this.#startPoll(uploadId);
     } catch (err) {
       this.error = `Transcode dispatch failed: ${err.message}`;
-      this.#updateUpload(uploadId, { job: { ...(u.job || {}), status: 'failed', error: err.message } });
+      this.#updateUpload(uploadId, { job: { status: 'not submitted', error: err.message } });
     }
   }
 
@@ -476,7 +622,8 @@ Stream Key: ${s.ingest.stream_key}</pre>
           headers: { Authorization: `Bearer ${this.apiKey}` },
         });
         const cur = this.uploads.find((x) => x.id === uploadId);
-        const merged = { ...(cur?.job || {}), ...r.job };
+        if (!this.isConnected || this._pollers.get(uploadId) !== id || cur?.job?.id !== u.job.id) return;
+        const merged = r.job; // Each poll is authoritative, including cleared error fields.
         this.#updateUpload(uploadId, { job: merged });
         if (merged.status === 'succeeded' || merged.status === 'failed') {
           clearInterval(id);
@@ -586,10 +733,20 @@ Stream Key: ${s.ingest.stream_key}</pre>
     void this.#loadCaps();
   };
   #changeKey = () => {
+    if (this.liveBusy || (this.liveSession && !isLiveTerminal(this.liveSession))) {
+      this.error = 'Stop the current stream before changing API keys.';
+      return;
+    }
+    if (this.liveSession) this.#resetLive();
+    this._liveCreateKey = '';
     this.apiKey = '';
     sessionStorage.removeItem(KEY_STORAGE);
     window.__lvpApiKey = '';
   };
+}
+
+function isLiveTerminal(session) {
+  return Boolean(session && (session.ended_at || ['ended', 'failed', 'closed', 'expired'].includes(session.status)));
 }
 
 function formatDuration(sec) {
@@ -612,7 +769,8 @@ function readUploads() {
     const raw = localStorage.getItem(UPLOADS_STORAGE);
     if (!raw) return [];
     const arr = JSON.parse(raw);
-    return Array.isArray(arr) ? arr : [];
+    return Array.isArray(arr) ? arr.map(u => u.job?.status === 'submitting' && !u.job?.id
+      ? { ...u, job: { status: 'not submitted' } } : u) : [];
   } catch { return []; }
 }
 

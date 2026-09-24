@@ -1,0 +1,35 @@
+# Historical pre-v2 debt register
+
+Archived 2026-09-24 for rationale only. Live status and remaining work are in Beads; this document is not a task tracker.
+
+# Original register
+
+The following is the original pre-migration register. It is frozen; updates
+belong in Beads.
+
+| Item | Priority | Trigger | Notes |
+|---|---|---|---|
+| `cloudflared` tunnel for the gateway so the webhook receiver works against external runners. | high | now | The webhook receiver is live at `POST /api/webhooks/abr` and the gateway passes `webhook_url`+`webhook_secret` to the runner whenever `GATEWAY_PUBLIC_URL` is set. For remote runners (us-central-worker.xodeapp.xyz et al.) that URL must be publicly reachable. Wire `cloudflared` into compose pointing at `gateway:4000`, set `GATEWAY_PUBLIC_URL` to its hostname on each `make dev`, and runner errors surface as `runner_status=error` automatically. |
+| ~~Bump `tztcloud/livepeer-payment-daemon` image tag once the upstream session-persistence release is published.~~ **DONE 2026-05-20.** | — | — | Bumped to `v1.3.1` (`.env`: `LIVEPEER_PAYER_DAEMON_TAG=v1.3.1`, `docker-compose.yml` default also `v1.3.1`). Confirms with `version=v1.3.1-bdeffb372c50-dirty mode=sender` on boot. Vendored proto-go bindings already match. Still pending: confirm `xodeapp` upgrades their capability-broker + receiver-side payment-daemon to v1.3.1 — the new error-flow + restart-stable sessions only work end-to-end if BOTH sides are on v1.3.1. Validation test (kill-receiver mid-session, confirm credit survives) pending xodeapp upgrade. |
+| ~~Migrate `/api/v1/live` to `live-session-remote-runner@v0`.~~ **DONE 2026-05-20.** Mode then **REMOVED 2026-05-21** in favour of `live-session-gateway-ingest@v0` (plan 0003). | — | — | Six phases shipped: migration 0005, new broker client, POST/GET/DELETE rewrite, reconciler + auto-topup. See [`completed/0002-live-session-remote-runner.md`](./0002-live-session-remote-runner.md). Subsequently superseded — only `live-session-gateway-ingest@v0` survives in code. The `live-session-remote-runner@v0` references in `gateway/internal/proxy/livepeer/live_session.go` field comments and migration 0005 are historical (the wire shape originally came from that spec). |
+| ~~Add gateway-ingest mode (live-session-gateway-ingest@v0).~~ **DONE 2026-05-20.** | — | — | Eight phases shipped: migration 0006, RTMP server, S3 credential minter, broker client, handler dispatch, RTMP relay, lifecycle/health/metrics, SPA. Mode discriminated by offering (`default` vs `gateway-ingest`) under the shared `video:transcode.live` capability. See [`active/0003-gateway-rtmp-ingest.md`](./0003-gateway-rtmp-ingest.md). |
+| First real `/api/v1/live` smoke against a live orchestrator. | high | xodeapp publishes `video:transcode.live` (gateway-ingest offering) | Acceptance: open session, ffmpeg pushes RTMP to gateway `:1935`, HLS playback works, idle timeout triggers session.end (broker emits `idle_timeout` close_reason), runway exhaustion triggers auto-topup (counter `livepeer_gateway_live_topup_attempts_total{outcome="succeeded"}` increments). |
+| ~~Bump daemon images to `v1.3.2` when published.~~ **OBSOLETE 2026-06-06.** | — | — | The gateway no longer runs the payer/registry daemons — payments + routing moved to LOC (Livepeer Open Clearinghouse). Daemon versioning is now LOC's concern. |
+| File upstream LOC issue: no rotation-recovery primitive on session refill (live streams end with `rotation_unrecoverable` when the broker rotates mid-session). Propose `force_rotate` on refill or outcome-aware re-selection. | med | LOC repo issue tracker | See docs/troubleshooting/loc-refill-rotation.md. |
+| ~~Publish first gateway docker image.~~ **DONE 2026-05-21.** | — | — | `tztcloud/livepeer-video-gateway:v1.3.0` is live on Docker Hub. Publish flow: `make docker-publish TAG=v1.3.0` (requires `docker login docker.io` first) or `git tag v1.3.0 && git push --tags` (CI workflow at `.github/workflows/ci.yml` uses `DOCKERHUB_USERNAME` + `DOCKERHUB_TOKEN`). |
+| Live-stream webhook integration. | med | post-tunnel | The `live-session-gateway-ingest@v0` mode doesn't have an out-of-band webhook surface yet; today the reconciler polls the broker. Broker-side teardowns (balance exhausted, runner crash) get picked up on the next reconcile tick rather than instantly. Mirror the ABR webhook design once the broker exposes the hook. |
+| Real-broker validation of `/api/v1/abr` end-to-end. | high | Phase 4 done | Need at least one orchestrator advertising `video:transcode.abr` with a funded payer keystore *and* working ABR preset config. As of 2026-05-20 us-central-worker.xodeapp.xyz returns `unknown preset: abr-standard` — operator-side regression unrelated to our gateway. |
+| Real-broker validation of `/api/v1/live` end-to-end. | high | Phase 4 done | For `video:transcode.live` with offering `gateway-ingest`. |
+| Janitor for stuck `live_streams.status='provisioning'` rows. | med | post-scaffold | Close + refund after `LIVE_PROVISIONING_TTL` (suggest 5m default). |
+| Signed download URLs at job dispatch instead of anonymous-read bucket. | med | production | Replace `mc anonymous set download` with per-job presigned GETs the runner consumes. |
+| Quote-aware ABR ladder pricing. | med | post-scaffold | Today `face_value` is duration × default rate; runners advertise `units_per_price` we should honor. |
+| Webhook / SSE channel for live status. | low | user demand | Out of v1; clients poll. |
+| Idempotency keys on `/api/v1/abr` + `/api/v1/live`. | low | user demand | Today duplicate POSTs create duplicate jobs / sessions. |
+| Distributed rate limiting (multi-replica). | low | scale | In-process token buckets only. |
+| Pepper rotation without invalidating existing keys. | low | rotation cycle | Add dual-lookup. |
+| Multi-operator admin role separation. | low | team growth | Currently one `ADMIN_TOKEN` for everyone. |
+| Gateway-side playback proxy (`/playback/:id/*`). | low | user demand | v2. Lets us add signed URLs + per-key auth. |
+| Sweeper for `usage_reservations.state='open'` orphans. | low | observability | If a request crashed before commit/refund, the row sits open. |
+| Capability hot-reload without restart. | low | operator UX | Today the refresh ticker handles it; admin "force refresh" button would help. |
+| Replace polling `GET /api/v1/abr/:id` with HEAD + cached status. | low | scale | Reduce DB churn under heavy polling. |
+| Mechanical import-graph linter for the layered architecture. | low | code growth | Currently enforced by reviewer attention. |

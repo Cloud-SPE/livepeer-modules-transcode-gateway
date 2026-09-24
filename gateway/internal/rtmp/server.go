@@ -1,12 +1,4 @@
-// Package rtmp hosts the gateway-owned RTMP ingest plane for the
-// live-session-gateway-ingest@v0 protocol mode. Customers push RTMP
-// to `rtmp://<gateway>:1935/live/<stream_key>`; this server authenticates
-// the stream key against the live_streams table, looks up which orch
-// the session is bound to, and (in Phase 6) relays bytes upstream.
-//
-// Phase 2 scope (this file): TCP listener bootstrap + handler skeleton
-// + stream-key auth. The relay step is wired separately so the auth
-// path can land + be tested independently.
+// Package rtmp authenticates customer keys and relays to Modules v2 runtime grants.
 package rtmp
 
 import (
@@ -27,9 +19,9 @@ import (
 // to the rest of the server package. Mirrors the pattern used elsewhere
 // (handlers' Deps struct).
 type Deps struct {
-	Log      *slog.Logger
-	Auth     Authenticator
-	Pepper   string  // IP_HASH_PEPPER, reused for stream_key hashing
+	Log    *slog.Logger
+	Auth   Authenticator
+	Pepper string // IP_HASH_PEPPER, reused for stream_key hashing
 	// Future: Relay, Metrics, CredentialMinter
 }
 
@@ -54,13 +46,13 @@ type AuthResult struct {
 // Server is the RTMP TCP listener + accept loop. Cheap to construct;
 // expensive only when Run is invoked.
 type Server struct {
-	deps     Deps
-	addr     string
-	listener net.Listener
-	rtmpSrv  *rtmp.Server
-	wg       sync.WaitGroup
-	closing  atomic.Bool
-	stats    serverStats
+	deps      Deps
+	addr      string
+	listening atomic.Bool
+	rtmpSrv   *rtmp.Server
+	wg        sync.WaitGroup
+	closing   atomic.Bool
+	stats     serverStats
 	// activeRelays maps live_stream_id → connHandler so the HTTP
 	// DELETE /v1/live path can synchronously tear down the customer
 	// RTMP socket + the upstream relay push, instead of waiting for
@@ -102,7 +94,8 @@ func (s *Server) Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	s.listener = ln
+	s.listening.Store(true)
+	defer s.listening.Store(false)
 	s.deps.Log.Info("rtmp server listening", "addr", s.addr)
 
 	// yutopp/go-rtmp's Server wraps an accept loop and invokes our
@@ -130,10 +123,11 @@ func (s *Server) Run(ctx context.Context) error {
 		s.closing.Store(true)
 		s.deps.Log.Info("rtmp server shutting down",
 			"active_publishes", s.stats.activePublishes.Load())
-		_ = ln.Close()
+		_ = srv.Close()
+		s.activeRelays.Range(func(key, value any) bool { s.CloseSession(key.(string)); return true })
 	}()
 
-	if err := srv.Serve(ln); err != nil && !errors.Is(err, net.ErrClosed) {
+	if err := srv.Serve(ln); err != nil && !errors.Is(err, net.ErrClosed) && !errors.Is(err, rtmp.ErrClosed) {
 		s.deps.Log.Error("rtmp server serve failed", "err", err)
 		return err
 	}
@@ -163,7 +157,7 @@ func (s *Server) ActivePublishes() int64 {
 // Listening reports whether Run has bound a TCP listener. Returns false
 // when the server is disabled (LIVE_RTMP_PORT=0) or hasn't started yet.
 func (s *Server) Listening() bool {
-	return s.listener != nil && !s.closing.Load()
+	return s.listening.Load() && !s.closing.Load()
 }
 
 // CloseSession synchronously tears down the active RTMP relay for the
@@ -202,7 +196,5 @@ func (s *Server) deregisterRelay(liveStreamID string, h *connHandler) {
 	// Only remove if the entry is still THIS handler — protects against
 	// a race where a new session for the same liveStreamID (shouldn't
 	// happen but cheap to guard) overwrote our registration.
-	if cur, ok := s.activeRelays.Load(liveStreamID); ok && cur == h {
-		s.activeRelays.Delete(liveStreamID)
-	}
+	s.activeRelays.CompareAndDelete(liveStreamID, h)
 }

@@ -119,7 +119,7 @@ class CcRegistry extends LitElement {
         </h2>
         <p class="msg">
           Straight from LOC — not the cache. These are the orchestrators
-          LOC can route <code>/v1/abr</code> and <code>/v1/live</code> to right now.
+          LOC can route <code>/api/v1/abr</code> and <code>/api/v1/live</code> to right now.
         </p>
         ${caps.length === 0
           ? html`<p class="msg">No capabilities cached; nothing to query.</p>`
@@ -135,19 +135,17 @@ class CcRegistry extends LitElement {
             ? html`<p class="msg warn">Zero candidates. LOC doesn't see anyone advertising this right now.</p>`
             : html`<table>
                 <thead><tr>
-                  <th>Worker</th><th>Eth address</th><th>Price (wei/unit)</th>
-                  <th>Work unit</th><th>Quote</th>
+                  <th>Worker</th><th>Eth address</th><th>Price (wei / units)</th>
+                  <th>Work unit</th><th>Protocol</th>
                 </tr></thead>
                 <tbody>
                   ${c.items.map(
                     (r) => html`<tr>
                       <td><code>${r.worker_url}</code></td>
                       <td><code>${r.eth_address || '—'}</code></td>
-                      <td>${r.price_per_work_unit_wei || '—'}</td>
+                      <td>${r.price_per_work_unit_wei || '—'} / ${r.units_per_price || '—'}</td>
                       <td>${r.work_unit || html`<span class="msg">—</span>`}</td>
-                      <td>${r.quote_id
-                        ? html`<code>${r.quote_id}</code> <span class="msg">v${r.quote_version}</span>`
-                        : html`<span class="msg">—</span>`}</td>
+                      <td><code>${r.protocol || '—'}</code></td>
                     </tr>`,
                   )}
                 </tbody>
@@ -163,7 +161,7 @@ class CcRegistry extends LitElement {
       <div class="card">
         <h2>Cached catalog (${c.items?.length ?? 0})</h2>
         <p class="msg">
-          The persisted view served by <code>/v1/capabilities</code>. Rebuilt
+          The persisted view served by <code>/api/v1/capabilities</code>. Rebuilt
           on every refresh tick; "Live candidates" above is the source of truth.
         </p>
         ${(c.items?.length ?? 0) === 0
@@ -171,7 +169,8 @@ class CcRegistry extends LitElement {
           : html`<table>
               <thead><tr>
                 <th>ID</th><th>Capability</th><th>Offering</th>
-                <th>Mode</th><th>Broker</th><th>Price (wei/unit)</th>
+                <th>Protocol</th><th>Work unit</th><th>Price (wei / units)</th>
+                <th>Contract metadata</th>
               </tr></thead>
               <tbody>
                 ${c.items.map(
@@ -179,9 +178,15 @@ class CcRegistry extends LitElement {
                     <td><code>${row.id}</code></td>
                     <td>${row.capability}</td>
                     <td>${row.offering}</td>
-                    <td><code>${row.interaction_mode || '—'}</code></td>
-                    <td><code>${row.broker_url || '—'}</code></td>
-                    <td>${row.price_per_work_unit_wei || '—'}</td>
+                    <td><code>${row.protocol || '—'}</code></td>
+                    <td><code>${row.work_unit || '—'}</code></td>
+                    <td>${row.price_per_work_unit_wei || '—'} / ${row.units_per_price || '—'}</td>
+                    <td><details><summary>View</summary><pre>${JSON.stringify({
+                      work_unit_estimator: row.work_unit_estimator,
+                      job: row.job,
+                      session: row.session,
+                      extra: row.extra,
+                    }, null, 2)}</pre></details></td>
                   </tr>`,
                 )}
               </tbody>

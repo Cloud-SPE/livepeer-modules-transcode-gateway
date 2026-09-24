@@ -156,15 +156,22 @@ func RegisterAdmin(api huma.API, deps Deps) {
 		out.Body.SnapshotAt, _ = deps.Caps.LastSnapshot(ctx)
 		for _, c := range rows {
 			out.Body.Items = append(out.Body.Items, CapabilityView{
-				ID:              c.CapabilityID,
-				Capability:      c.Capability,
-				Offering:        c.Offering,
-				InteractionMode: derefString(c.InteractionMode),
-				Name:            derefString(c.Name),
-				BrokerURL:       derefString(c.BrokerURL),
-				EthAddress:      derefString(c.EthAddress),
-				PriceWei:        bigToString(c.PricePerWorkUnitWei),
-				Active:          c.Active,
+				Protocol:          c.Protocol,
+				WorkUnit:          c.WorkUnit,
+				UnitsPerPrice:     bigStr(c.UnitsPerPrice),
+				WorkUnitEstimator: c.WorkUnitEstimatorJSON,
+				Job:               c.JobJSON,
+				Session:           c.SessionJSON,
+				Extra:             c.ExtraJSON,
+				ID:                c.CapabilityID,
+				Capability:        c.Capability,
+				Offering:          c.Offering,
+				InteractionMode:   derefString(c.InteractionMode),
+				Name:              derefString(c.Name),
+				BrokerURL:         derefString(c.BrokerURL),
+				EthAddress:        derefString(c.EthAddress),
+				PriceWei:          bigToString(c.PricePerWorkUnitWei),
+				Active:            c.Active,
 			})
 		}
 		return out, nil
@@ -387,9 +394,17 @@ func registerAdminABRJobs(api huma.API, deps Deps) {
 		if err != nil {
 			return nil, huma.Error500InternalServerError("abr jobs list", err)
 		}
+		ids := make([]uuid.UUID, 0, len(rows))
+		for _, r := range rows {
+			ids = append(ids, r.WorkID)
+		}
+		operations, err := repo.NewOperationRepo(deps.Pool).PublicViews(ctx, ids)
+		if err != nil {
+			return nil, huma.Error500InternalServerError("abr operation list", err)
+		}
 		out := &AdminABRJobsOut{}
 		for _, r := range rows {
-			out.Body.Items = append(out.Body.Items, AdminABRJobView{
+			item := AdminABRJobView{
 				WorkID:      r.WorkID,
 				APIKeyID:    r.APIKeyID,
 				RunnerJobID: derefString(r.RunnerJobID),
@@ -400,7 +415,16 @@ func registerAdminABRJobs(api huma.API, deps Deps) {
 				ErrorText:   derefString(r.ErrorText),
 				CreatedAt:   r.CreatedAt,
 				ResolvedAt:  r.ResolvedAt,
-			})
+			}
+			if op := operations[r.WorkID]; op != nil {
+				var view operationView
+				if err := json.Unmarshal(op.PublicJSON, &view); err != nil {
+					return nil, huma.Error500InternalServerError("abr operation view", err)
+				}
+				item.Status, item.AccountingState, item.ErrorCode = view.Status, op.State, view.FailureCode
+				item.ErrorText = abrStatusMessage(view.Status, view.FailureCode)
+			}
+			out.Body.Items = append(out.Body.Items, item)
 		}
 		return out, nil
 	})
@@ -479,12 +503,18 @@ func registerAdminRegistry(api huma.API, deps Deps) {
 						continue
 					}
 					out.Body.Items = append(out.Body.Items, AdminRegistryCandidate{
-						WorkerURL:  o.WorkerURL,
-						EthAddress: o.EthAddress,
-						Capability: c.Name,
-						Offering:   off.ID,
-						PriceWei:   off.PricePerWorkUnitWei.String(),
-						WorkUnit:   off.WorkUnit,
+						WorkerURL:         o.WorkerURL,
+						EthAddress:        o.EthAddress,
+						Capability:        c.Name,
+						Offering:          off.ID,
+						PriceWei:          bigStr(off.PricePerWorkUnitWei.BigInt()),
+						WorkUnit:          off.WorkUnit,
+						Protocol:          off.Protocol,
+						UnitsPerPrice:     bigStr(off.UnitsPerPrice.BigInt()),
+						WorkUnitEstimator: off.WorkUnitEstimator,
+						Job:               off.Job,
+						Session:           off.Session,
+						Extra:             off.Extra,
 					})
 				}
 			}
@@ -602,16 +632,19 @@ type AdminLiveStreamsOut struct {
 }
 
 type AdminABRJobView struct {
-	WorkID      uuid.UUID  `json:"work_id"`
-	APIKeyID    uuid.UUID  `json:"api_key_id"`
-	RunnerJobID string     `json:"runner_job_id,omitempty"`
-	State       string     `json:"state"`
-	BrokerURL   string     `json:"broker_url,omitempty"`
-	LatencyMs   int        `json:"latency_ms,omitempty"`
-	StatusCode  int        `json:"status_code,omitempty"`
-	ErrorText   string     `json:"error_text,omitempty"`
-	CreatedAt   time.Time  `json:"created_at"`
-	ResolvedAt  *time.Time `json:"resolved_at,omitempty"`
+	Status          string     `json:"status,omitempty"`
+	AccountingState string     `json:"accounting_state,omitempty"`
+	ErrorCode       string     `json:"error_code,omitempty"`
+	WorkID          uuid.UUID  `json:"work_id"`
+	APIKeyID        uuid.UUID  `json:"api_key_id"`
+	RunnerJobID     string     `json:"runner_job_id,omitempty"`
+	State           string     `json:"state"`
+	BrokerURL       string     `json:"broker_url,omitempty"`
+	LatencyMs       int        `json:"latency_ms,omitempty"`
+	StatusCode      int        `json:"status_code,omitempty"`
+	ErrorText       string     `json:"error_text,omitempty"`
+	CreatedAt       time.Time  `json:"created_at"`
+	ResolvedAt      *time.Time `json:"resolved_at,omitempty"`
 }
 
 type AdminABRJobsOut struct {
@@ -638,15 +671,20 @@ type AdminRegistrySummaryOut struct {
 }
 
 type AdminRegistryCandidate struct {
-	WorkerURL     string `json:"worker_url"`
-	EthAddress    string `json:"eth_address,omitempty"`
-	Capability    string `json:"capability"`
-	Offering      string `json:"offering"`
-	PriceWei      string `json:"price_per_work_unit_wei,omitempty"`
-	WorkUnit      string `json:"work_unit,omitempty"`
-	QuoteID       string `json:"quote_id,omitempty"`
-	QuoteVersion  int64  `json:"quote_version,omitempty"`
-	UnitsPerPrice int64  `json:"units_per_price,omitempty"`
+	WorkerURL         string          `json:"worker_url"`
+	EthAddress        string          `json:"eth_address,omitempty"`
+	Capability        string          `json:"capability"`
+	Offering          string          `json:"offering"`
+	PriceWei          string          `json:"price_per_work_unit_wei,omitempty"`
+	WorkUnit          string          `json:"work_unit,omitempty"`
+	QuoteID           string          `json:"quote_id,omitempty"`
+	QuoteVersion      int64           `json:"quote_version,omitempty"`
+	UnitsPerPrice     string          `json:"units_per_price,omitempty"`
+	Protocol          string          `json:"protocol"`
+	WorkUnitEstimator json.RawMessage `json:"work_unit_estimator,omitempty"`
+	Job               json.RawMessage `json:"job,omitempty"`
+	Session           json.RawMessage `json:"session,omitempty"`
+	Extra             json.RawMessage `json:"extra,omitempty"`
 }
 
 type AdminRegistryCandidatesOut struct {
@@ -683,15 +721,22 @@ type AdminApproveOut struct {
 }
 
 type CapabilityView struct {
-	ID              string `json:"id"`
-	Capability      string `json:"capability"`
-	Offering        string `json:"offering"`
-	InteractionMode string `json:"interaction_mode,omitempty"`
-	Name            string `json:"name,omitempty"`
-	BrokerURL       string `json:"broker_url,omitempty"`
-	EthAddress      string `json:"eth_address,omitempty"`
-	PriceWei        string `json:"price_per_work_unit_wei,omitempty"`
-	Active          bool   `json:"active"`
+	Protocol          string          `json:"protocol"`
+	WorkUnit          string          `json:"work_unit,omitempty"`
+	UnitsPerPrice     string          `json:"units_per_price,omitempty"`
+	WorkUnitEstimator json.RawMessage `json:"work_unit_estimator,omitempty"`
+	Job               json.RawMessage `json:"job,omitempty"`
+	Session           json.RawMessage `json:"session,omitempty"`
+	Extra             json.RawMessage `json:"extra,omitempty"`
+	ID                string          `json:"id"`
+	Capability        string          `json:"capability"`
+	Offering          string          `json:"offering"`
+	InteractionMode   string          `json:"interaction_mode,omitempty"`
+	Name              string          `json:"name,omitempty"`
+	BrokerURL         string          `json:"broker_url,omitempty"`
+	EthAddress        string          `json:"eth_address,omitempty"`
+	PriceWei          string          `json:"price_per_work_unit_wei,omitempty"`
+	Active            bool            `json:"active"`
 }
 
 type AdminCapabilitiesOut struct {

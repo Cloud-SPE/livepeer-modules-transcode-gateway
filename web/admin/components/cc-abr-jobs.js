@@ -1,10 +1,6 @@
 import { LitElement, html } from 'lit';
 import { api } from '../lib/api.js';
 
-// Transcode-specific: recent ABR ladder jobs across all users. Refunded
-// jobs are the operator's biggest signal — they mean the broker took
-// the job but the gateway couldn't commit. error_text says why.
-
 class CcABRJobs extends LitElement {
   static properties = {
     rows:  { state: true },
@@ -45,12 +41,9 @@ class CcABRJobs extends LitElement {
       <div class="card">
         <h2>ABR jobs</h2>
         <p class="msg">
-          Every <code>POST /v1/abr</code> shows here. The gateway commits
-          when the broker returns 2xx — so a <code>committed</code> row
-          only proves the broker accepted, not that <code>master.m3u8</code>
-          actually landed in storage. The Health tab shows route cooldowns;
-          the runner-side master playlist is the ground truth for
-          completion.
+          Job status shows transcode progress; accounting tracks settlement separately.
+          Payment admission rejection stays pending until settlement is confirmed.
+          A succeeded job requires both a runner success result and completed accounting.
         </p>
         <label class="msg" style="display:flex; gap:8px; align-items:center; margin-bottom:12px">
           Window:
@@ -75,7 +68,9 @@ class CcABRJobs extends LitElement {
                     <td>${j.runner_job_id
                       ? html`<code>${j.runner_job_id}</code>`
                       : html`<span class="msg">—</span>`}</td>
-                    <td>${statePill(j.state)}
+                    <td>${statePill(j.status || j.state)}
+                      ${j.accounting_state ? html`<br><span class="msg">Accounting: ${j.accounting_state}</span>` : ''}
+                      ${j.error_code ? html`<br><code>${j.error_code}</code>` : ''}
                       ${j.error_text
                         ? html`<br><span class="msg error">${j.error_text}</span>`
                         : ''}</td>
@@ -95,8 +90,8 @@ class CcABRJobs extends LitElement {
 }
 
 function statePill(state) {
-  const cls = state === 'committed' ? 'ok' : state === 'refunded' ? 'warn' : '';
-  return html`<span class="pill ${cls}">${state}</span>`;
+  const cls = state === 'succeeded' ? 'ok' : ['failed', 'admission_rejected', 'refunded'].includes(state) ? 'warn' : '';
+  return html`<span class="pill ${cls}">${state === 'admission_rejected' ? 'Settlement pending' : state}</span>`;
 }
 function shortHost(url) { try { return new URL(url).host; } catch { return url; } }
 

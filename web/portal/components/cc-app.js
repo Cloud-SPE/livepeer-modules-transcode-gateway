@@ -56,6 +56,7 @@ class CcApp extends LitElement {
   #onLogout = async () => {
     try { await api('/portal/logout', { method: 'POST' }); } catch {}
     sessionStorage.removeItem('lvp_video_api_key');
+    sessionStorage.removeItem('lvp_live_selection');
     window.__lvpApiKey = '';
     this.session = null;
     location.hash = '#/account';

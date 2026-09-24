@@ -32,11 +32,34 @@ Response:
 
 ### `POST /api/v1/abr`
 
-See [`docs/design-docs/abr-pipeline.md`](../design-docs/abr-pipeline.md).
+See the generated `/openapi.json` for request fields and [Modules v2](../design-docs/modules-v2.md) for the paid-job workload boundary.
+
+New ABR jobs authorize the duration-based estimate plus 25% headroom, rounded
+up and capped by `ABR_MAX_TOTAL_UNITS`. The estimate sums the preset's video
+rendition pixels × 60 fps × `estimated_input_seconds`, divides by one million,
+and rounds up once. Omitted/zero duration uses 60 seconds. Audio adds no units.
+Provide an accurate duration rounded up; for higher frame rates or uncertain
+inputs, specify `max_total_units` explicitly. An explicit cap must cover the
+estimate and stay within the server ceiling. These are authorization bounds,
+not measured charges or a guarantee that an underestimated input can complete.
+Existing jobs retain their persisted bounds, including on idempotent retries.
+
+### `GET /api/v1/abr/:id`
+
+`status=admission_rejected`, `phase=settlement_pending`, and
+`error_code=broker_admission_rejected` mean the broker refused admission and
+LOC has not yet finalized accounting. Keep polling; this is not a successful
+transcode, a confirmed refund, or permission to submit a replacement automatically.
+The gateway polls recovery without replaying a definitively rejected workload.
+After LOC confirms terminal `NOT_ADMITTED`, status becomes `failed` with
+`error_code=not_admitted`; `accounting_state` remains the authoritative LOC
+accounting outcome. Playback links appear only for verified success.
+The admin listing exposes `status`, `accounting_state`, and `error_code`
+separately from the reservation's legacy `state`.
 
 ### `POST /api/v1/live`
 
-See [`docs/design-docs/live-stream-pipeline.md`](../design-docs/live-stream-pipeline.md).
+See the generated `/openapi.json` for request fields and [Modules v2](../design-docs/modules-v2.md) for session descriptors and grants.
 
 ### `GET /api/v1/capabilities`
 
@@ -61,13 +84,13 @@ All errors follow huma's RFC 9457 problem+json shape:
 | 401 | `invalid_api_key` | Missing or revoked Bearer key. |
 | 403 | `key_not_approved` | Key exists but `waitlist.status != 'approved'`. |
 | 404 | `not_found` | `/api/v1/abr/:id` / `/api/v1/live/:id` doesn't exist. |
-| 409 | `live_already_ended` | DELETE on an already-ended live session. |
 | 429 | `rate_limit_exceeded` | Per-key token bucket exhausted. |
-| 502 | `no_capable_broker` | No candidates returned for the requested capability. |
-| 502 | `upstream_broker_error` | All candidates failed; last error attached. |
-| 503 | `capabilities_cache_unavailable` | Registry refresh hasn't landed yet. |
-| 503 | `payer_unavailable` | `payment-daemon` socket unreachable. |
-| 503 | `registry_unavailable` | `service-registry-daemon` socket unreachable. |
+| 503 | `loc_unavailable` | LOC is not configured or cannot authorize work. |
+
+Upstream authorization, protocol and recovery errors are reported by the
+current handlers. The generated OpenAPI schema is the definitive request
+and response contract; legacy daemon errors and v0 interaction modes no
+longer describe this API.
 
 ## Rate limit
 
@@ -80,5 +103,4 @@ Per `api_key_id` token bucket: 60 / min, burst 30. Configurable via
 - VOD single-rendition transcode (`/api/v1/transcode`)
 - Server-sent events / webhooks
 - Gateway-side playback proxy
-- Idempotency keys
 - Per-key capability scoping

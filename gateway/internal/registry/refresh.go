@@ -90,13 +90,19 @@ func buildRows(caps []loc.Capability, filter []string) []repo.UpsertCapability {
 		}
 		for _, offering := range capability.Offerings {
 			rows = append(rows, repo.UpsertCapability{
-				CapabilityID:        capability.Name + ":" + offering.ID,
-				Capability:          capability.Name,
-				Offering:            offering.ID,
-				InteractionMode:     guessInteractionMode(capability.Name),
-				Name:                capability.Name,
-				Category:            "transcode",
-				PricePerWorkUnitWei: offering.PricePerWorkUnitWei.BigInt(),
+				CapabilityID:          capability.Name + ":" + offering.ID,
+				Capability:            capability.Name,
+				Offering:              offering.ID,
+				Protocol:              offering.Protocol,
+				WorkUnit:              offering.WorkUnit,
+				UnitsPerPrice:         offering.UnitsPerPrice.BigInt(),
+				WorkUnitEstimatorJSON: offering.WorkUnitEstimator,
+				JobJSON:               offering.Job,
+				SessionJSON:           offering.Session,
+				ExtraJSON:             offering.Extra,
+				Name:                  capability.Name,
+				Category:              "transcode",
+				PricePerWorkUnitWei:   offering.PricePerWorkUnitWei.BigInt(),
 			})
 		}
 	}
@@ -109,31 +115,6 @@ func matchesFilter(capability string, filter []string) bool {
 	}
 	for _, c := range filter {
 		if c == capability {
-			return true
-		}
-	}
-	return false
-}
-
-// guessInteractionMode returns the canonical mode for a known capability
-// name. Unknown capabilities fall back to http-reqresp.
-//
-// Used for catalog metadata only — the gateway dispatches via the
-// CapMap (livepeer.NewDefault), which is the actual source of truth
-// for the Livepeer-Mode header. Keeping this heuristic aligned with
-// the CapMap defaults avoids confusing the admin Registry view.
-func guessInteractionMode(capability string) string {
-	switch {
-	case isLive(capability):
-		return "live-session-gateway-ingest@v0"
-	default:
-		return "http-reqresp@v0"
-	}
-}
-
-func isLive(capability string) bool {
-	for i := 0; i+4 <= len(capability); i++ {
-		if capability[i:i+4] == "live" {
 			return true
 		}
 	}
