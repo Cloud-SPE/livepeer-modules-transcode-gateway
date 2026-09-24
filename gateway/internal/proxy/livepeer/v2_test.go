@@ -232,3 +232,26 @@ func TestRuntimeGrantEndpointAndCredentialIsolation(t *testing.T) {
 		t.Fatalf("grant exchange failed: %v", err)
 	}
 }
+
+func TestExchangePendingDiagnosticsAreSafe(t *testing.T) {
+	for _, outcome := range []string{"ADMISSION_REJECTED", "IN_FLIGHT", "secret-token"} {
+		t.Run(outcome, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_ = json.NewEncoder(w).Encode(map[string]any{"outcome": outcome, "detail": "secret-detail", "status": 402})
+			}))
+			defer server.Close()
+			claim, err := NewHTTPClient(time.Second).LookupJobV2(context.Background(), server.URL, "request-1", "", "video-frame-megapixel", "auth-1")
+			var pending *ExchangePendingError
+			if claim != nil || !errors.Is(err, ErrAccountingPending) || !errors.As(err, &pending) {
+				t.Fatalf("expected unsigned pending outcome: %v", err)
+			}
+			expected := outcome
+			if outcome == "secret-token" {
+				expected = "UNKNOWN"
+			}
+			if pending.Outcome != expected || strings.Contains(err.Error(), "secret") {
+				t.Fatalf("unsafe outcome: %v", err)
+			}
+		})
+	}
+}

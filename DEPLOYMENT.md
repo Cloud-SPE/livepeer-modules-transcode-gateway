@@ -151,3 +151,31 @@ refund or delete its operation record as a repair shortcut.
 Tasks, validation findings and deployment follow-ups belong in Beads; see
 [PLANS.md](PLANS.md). No deployment, image publish or paid network test is
 implied by editing the local repositories.
+
+## Diagnosing paid operations
+
+Paid-operation warnings contain `operation_id`, `kind`, `state`, `attempt`,
+`stop_requested`, and `retryable`. Authorized operations also include
+`loc_job_id` or `loc_session_id`, plus `broker_request_id` for correlation
+with LOC and broker logs. These diagnostics were added under Bead `vgw-6bq`.
+
+- `paid operation terminal refusal`, `retryable=false`: issuance was refused
+  and the gateway finished its local failure handling. This is not a queued retry.
+- `loc_http_422` with `loc_code=AUTHORIZATION_REFUSED` and
+  `reason_code=authorization_limit_exceeded`: compare
+  `requested_max_debit_wei` with `payer_max_authorization_wei`.
+- `broker_http_402`: the broker rejected the HTTP request; `broker_endpoint`
+  identifies which operation failed. Inspect receiver funding/admission logs.
+- `paid operation broker recovery pending`, `broker_outcome=ADMISSION_REJECTED`:
+  the broker reports admission rejection, but signed terminal accounting is
+  still required. `recovery_action=await_loc_signed_non_admission` identifies
+  the LOC recovery path to investigate. This log is not evidence of a refund.
+- `upstream_timeout`: a request deadline or network timeout expired.
+
+Recovery warnings retain `retryable=true` while the durable operation is
+unfinished, even if the underlying HTTP response is a 4xx. This refers to
+operation recovery, not permission to create a replacement job. Raw upstream
+messages, request/response bodies, credential-bearing URLs, and unknown error
+codes are deliberately excluded. Logs diagnose failures; they do not change
+settlement or retry policy. Existing operations acquire the new diagnostics
+when their next recovery attempt runs after deployment.

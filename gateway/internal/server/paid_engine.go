@@ -274,7 +274,7 @@ func (e *PaidEngine) Process(ctx context.Context, id uuid.UUID) error {
 		o.LastError = &code
 		delay := time.Duration(min(60, 2*o.Attempts)) * time.Second
 		o.NextAttemptAt = time.Now().Add(delay)
-		e.deps.Log.Warn("paid operation pending retry", "operation_id", o.ID, "state", o.State, "code", code)
+		e.logPaidError(o, s, "operation", err)
 	}
 	persistCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -282,16 +282,6 @@ func (e *PaidEngine) Process(ctx context.Context, id uuid.UUID) error {
 		return saveErr
 	}
 	return err
-}
-func safePaidError(err error) string {
-	var ae *loc.APIError
-	if errors.As(err, &ae) {
-		return fmt.Sprintf("loc_http_%d", ae.StatusCode)
-	}
-	if errors.Is(err, context.DeadlineExceeded) {
-		return "upstream_timeout"
-	}
-	return "upstream_or_accounting_pending"
 }
 func (e *PaidEngine) auth(s *operationSecrets, request, authorization, workID string) (livepeer.BrokerAuth, error) {
 	proof, err := e.signer.Proof(authorization)
@@ -323,6 +313,8 @@ func (e *PaidEngine) runABR(ctx context.Context, l *repo.OperationLock, o *repo.
 		claim, err := e.deps.HTTP.LookupJobV2(ctx, s.Job.BrokerURL, s.Job.RequestID, "", s.Job.WorkUnit, s.Job.WorkID)
 		if err == nil {
 			s.Claim = claim
+		} else {
+			e.logPaidError(o, s, "broker_exchange_lookup", err)
 		}
 		// LOC's terminal accounting outcome is authoritative even when the broker
 		// is unavailable. Never label a conservative charge as broker settlement.

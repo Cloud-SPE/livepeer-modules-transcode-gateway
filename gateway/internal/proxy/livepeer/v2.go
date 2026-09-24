@@ -27,6 +27,15 @@ const (
 
 var ErrAccountingPending = errors.New("broker accounting evidence is not terminal")
 
+// ExchangePendingError contains only allowlisted diagnostics, never broker detail
+// text or settlement material. An admission rejection is not signed non-admission.
+type ExchangePendingError struct {
+	Outcome string
+}
+
+func (e *ExchangePendingError) Error() string { return "broker exchange: " + e.Outcome }
+func (e *ExchangePendingError) Unwrap() error { return ErrAccountingPending }
+
 // BrokerAuth is scoped to one immutable invocation. Persist it with its exact
 // request body before dispatch, so retries cannot admit a second workload.
 type BrokerAuth struct {
@@ -209,7 +218,13 @@ func (c *HTTPClient) LookupJobV2(ctx context.Context, brokerURL, requestID, expe
 		return nil, err
 	}
 	if scalar(body["outcome"]) != "SETTLED" {
-		return nil, fmt.Errorf("%w: %s", ErrAccountingPending, scalar(body["outcome"]))
+		outcome := scalar(body["outcome"])
+		switch outcome {
+		case "ADMISSION_REJECTED", "ACCOUNTING_PENDING", "IN_FLIGHT", "ADMITTED_OUTCOME_UNKNOWN", "ADMITTED_EVIDENCE_EXPIRED", "NOT_ADMITTED", "NO_RECORD":
+		default:
+			outcome = "UNKNOWN"
+		}
+		return nil, &ExchangePendingError{Outcome: outcome}
 	}
 	if scalar(body["request_id"]) != requestID {
 		return nil, fmt.Errorf("broker: exchange request identity mismatch")
