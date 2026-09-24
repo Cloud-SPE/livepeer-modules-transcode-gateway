@@ -1,3 +1,6 @@
+> Historical pre-v2 design archive, migrated to Beads on 2026-09-24.
+> This document is rationale only; current work is tracked in Beads.
+
 ---
 title: live-runner status + control-plane hardening (upstream change)
 status: tracking

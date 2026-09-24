@@ -1,3 +1,5 @@
+> Historical pre-v2 design. For current behavior see [Modules v2](modules-v2.md) and [deployment](../../DEPLOYMENT.md).
+
 # Route selection (historical — LOC owns this now)
 
 > **Superseded by the LOC migration.** The gateway no longer selects

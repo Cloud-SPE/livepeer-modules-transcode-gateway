@@ -32,11 +32,11 @@ Response:
 
 ### `POST /api/v1/abr`
 
-See [`docs/design-docs/abr-pipeline.md`](../design-docs/abr-pipeline.md).
+See the generated `/openapi.json` for request fields and [Modules v2](../design-docs/modules-v2.md) for the paid-job workload boundary.
 
 ### `POST /api/v1/live`
 
-See [`docs/design-docs/live-stream-pipeline.md`](../design-docs/live-stream-pipeline.md).
+See the generated `/openapi.json` for request fields and [Modules v2](../design-docs/modules-v2.md) for session descriptors and grants.
 
 ### `GET /api/v1/capabilities`
 
@@ -61,13 +61,13 @@ All errors follow huma's RFC 9457 problem+json shape:
 | 401 | `invalid_api_key` | Missing or revoked Bearer key. |
 | 403 | `key_not_approved` | Key exists but `waitlist.status != 'approved'`. |
 | 404 | `not_found` | `/api/v1/abr/:id` / `/api/v1/live/:id` doesn't exist. |
-| 409 | `live_already_ended` | DELETE on an already-ended live session. |
 | 429 | `rate_limit_exceeded` | Per-key token bucket exhausted. |
-| 502 | `no_capable_broker` | No candidates returned for the requested capability. |
-| 502 | `upstream_broker_error` | All candidates failed; last error attached. |
-| 503 | `capabilities_cache_unavailable` | Registry refresh hasn't landed yet. |
-| 503 | `payer_unavailable` | `payment-daemon` socket unreachable. |
-| 503 | `registry_unavailable` | `service-registry-daemon` socket unreachable. |
+| 503 | `loc_unavailable` | LOC is not configured or cannot authorize work. |
+
+Upstream authorization, protocol and recovery errors are reported by the
+current handlers. The generated OpenAPI schema is the definitive request
+and response contract; legacy daemon errors and v0 interaction modes no
+longer describe this API.
 
 ## Rate limit
 
@@ -80,5 +80,4 @@ Per `api_key_id` token bucket: 60 / min, burst 30. Configurable via
 - VOD single-rendition transcode (`/api/v1/transcode`)
 - Server-sent events / webhooks
 - Gateway-side playback proxy
-- Idempotency keys
 - Per-key capability scoping

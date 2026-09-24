@@ -156,15 +156,22 @@ func RegisterAdmin(api huma.API, deps Deps) {
 		out.Body.SnapshotAt, _ = deps.Caps.LastSnapshot(ctx)
 		for _, c := range rows {
 			out.Body.Items = append(out.Body.Items, CapabilityView{
-				ID:              c.CapabilityID,
-				Capability:      c.Capability,
-				Offering:        c.Offering,
-				InteractionMode: derefString(c.InteractionMode),
-				Name:            derefString(c.Name),
-				BrokerURL:       derefString(c.BrokerURL),
-				EthAddress:      derefString(c.EthAddress),
-				PriceWei:        bigToString(c.PricePerWorkUnitWei),
-				Active:          c.Active,
+				Protocol:          c.Protocol,
+				WorkUnit:          c.WorkUnit,
+				UnitsPerPrice:     bigStr(c.UnitsPerPrice),
+				WorkUnitEstimator: c.WorkUnitEstimatorJSON,
+				Job:               c.JobJSON,
+				Session:           c.SessionJSON,
+				Extra:             c.ExtraJSON,
+				ID:                c.CapabilityID,
+				Capability:        c.Capability,
+				Offering:          c.Offering,
+				InteractionMode:   derefString(c.InteractionMode),
+				Name:              derefString(c.Name),
+				BrokerURL:         derefString(c.BrokerURL),
+				EthAddress:        derefString(c.EthAddress),
+				PriceWei:          bigToString(c.PricePerWorkUnitWei),
+				Active:            c.Active,
 			})
 		}
 		return out, nil
@@ -479,12 +486,18 @@ func registerAdminRegistry(api huma.API, deps Deps) {
 						continue
 					}
 					out.Body.Items = append(out.Body.Items, AdminRegistryCandidate{
-						WorkerURL:  o.WorkerURL,
-						EthAddress: o.EthAddress,
-						Capability: c.Name,
-						Offering:   off.ID,
-						PriceWei:   off.PricePerWorkUnitWei.String(),
-						WorkUnit:   off.WorkUnit,
+						WorkerURL:         o.WorkerURL,
+						EthAddress:        o.EthAddress,
+						Capability:        c.Name,
+						Offering:          off.ID,
+						PriceWei:          bigStr(off.PricePerWorkUnitWei.BigInt()),
+						WorkUnit:          off.WorkUnit,
+						Protocol:          off.Protocol,
+						UnitsPerPrice:     bigStr(off.UnitsPerPrice.BigInt()),
+						WorkUnitEstimator: off.WorkUnitEstimator,
+						Job:               off.Job,
+						Session:           off.Session,
+						Extra:             off.Extra,
 					})
 				}
 			}
@@ -638,15 +651,20 @@ type AdminRegistrySummaryOut struct {
 }
 
 type AdminRegistryCandidate struct {
-	WorkerURL     string `json:"worker_url"`
-	EthAddress    string `json:"eth_address,omitempty"`
-	Capability    string `json:"capability"`
-	Offering      string `json:"offering"`
-	PriceWei      string `json:"price_per_work_unit_wei,omitempty"`
-	WorkUnit      string `json:"work_unit,omitempty"`
-	QuoteID       string `json:"quote_id,omitempty"`
-	QuoteVersion  int64  `json:"quote_version,omitempty"`
-	UnitsPerPrice int64  `json:"units_per_price,omitempty"`
+	WorkerURL         string          `json:"worker_url"`
+	EthAddress        string          `json:"eth_address,omitempty"`
+	Capability        string          `json:"capability"`
+	Offering          string          `json:"offering"`
+	PriceWei          string          `json:"price_per_work_unit_wei,omitempty"`
+	WorkUnit          string          `json:"work_unit,omitempty"`
+	QuoteID           string          `json:"quote_id,omitempty"`
+	QuoteVersion      int64           `json:"quote_version,omitempty"`
+	UnitsPerPrice     string          `json:"units_per_price,omitempty"`
+	Protocol          string          `json:"protocol"`
+	WorkUnitEstimator json.RawMessage `json:"work_unit_estimator,omitempty"`
+	Job               json.RawMessage `json:"job,omitempty"`
+	Session           json.RawMessage `json:"session,omitempty"`
+	Extra             json.RawMessage `json:"extra,omitempty"`
 }
 
 type AdminRegistryCandidatesOut struct {
@@ -683,15 +701,22 @@ type AdminApproveOut struct {
 }
 
 type CapabilityView struct {
-	ID              string `json:"id"`
-	Capability      string `json:"capability"`
-	Offering        string `json:"offering"`
-	InteractionMode string `json:"interaction_mode,omitempty"`
-	Name            string `json:"name,omitempty"`
-	BrokerURL       string `json:"broker_url,omitempty"`
-	EthAddress      string `json:"eth_address,omitempty"`
-	PriceWei        string `json:"price_per_work_unit_wei,omitempty"`
-	Active          bool   `json:"active"`
+	Protocol          string          `json:"protocol"`
+	WorkUnit          string          `json:"work_unit,omitempty"`
+	UnitsPerPrice     string          `json:"units_per_price,omitempty"`
+	WorkUnitEstimator json.RawMessage `json:"work_unit_estimator,omitempty"`
+	Job               json.RawMessage `json:"job,omitempty"`
+	Session           json.RawMessage `json:"session,omitempty"`
+	Extra             json.RawMessage `json:"extra,omitempty"`
+	ID                string          `json:"id"`
+	Capability        string          `json:"capability"`
+	Offering          string          `json:"offering"`
+	InteractionMode   string          `json:"interaction_mode,omitempty"`
+	Name              string          `json:"name,omitempty"`
+	BrokerURL         string          `json:"broker_url,omitempty"`
+	EthAddress        string          `json:"eth_address,omitempty"`
+	PriceWei          string          `json:"price_per_work_unit_wei,omitempty"`
+	Active            bool            `json:"active"`
 }
 
 type AdminCapabilitiesOut struct {

@@ -1,3 +1,5 @@
+> Historical pre-v2 design. For current behavior see [Modules v2](modules-v2.md) and [deployment](../../DEPLOYMENT.md).
+
 # Boot sequence
 
 What `gateway/cmd/gateway/main.go` does between process start and

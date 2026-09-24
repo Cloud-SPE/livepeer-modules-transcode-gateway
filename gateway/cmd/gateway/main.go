@@ -29,7 +29,7 @@ import (
 // Build-time identity sent to LOC on every request (trust scoring).
 // version/gitSHA are overridable via -ldflags "-X main.version=… -X main.gitSHA=…".
 var (
-	version = "0.1.0"
+	version = "2.0.0"
 	gitSHA  = "dev"
 )
 
@@ -73,6 +73,10 @@ func run() error {
 	sessions := repo.NewSessionRepo(pool)
 	usage := repo.NewReservationRepo(pool)
 	live := repo.NewLiveRepo(pool)
+	operations := repo.NewOperationRepo(pool)
+	if err := operations.CheckLegacyDrain(ctx); err != nil {
+		return err
+	}
 	caps := repo.NewCapabilityRepo(pool)
 
 	// Email
@@ -122,31 +126,31 @@ func run() error {
 		Metrics:  met,
 	}
 
-	// Background reconciler for live sessions. Polls broker state for
-	// active sessions and auto-tops-up when runway runs low. Disabled
-	// when LIVE_RECONCILE_INTERVAL_SECS=0.
-	liveReconciler := server.NewLiveReconciler(deps)
-	go liveReconciler.Run(ctx)
-
-	// Settle janitor: re-drives LOC settles stuck in 'pending' so
-	// encumbered credit is released after crashes / settle failures.
-	settleJanitor := server.NewSettleJanitor(deps)
-	go settleJanitor.Run(ctx)
-
-	// RTMP server for live-session-gateway-ingest@v0. Bound only when
-	// LIVE_RTMP_PORT > 0 (plan 0003). Disabled by default until upstream
-	// broker / runner support lands.
+	// RTMP relay accepts customer keys; upstream keys remain encrypted.
+	authenticator := &rtmp.RepoAuthenticator{Live: live}
 	rtmpSrv := rtmp.New(rtmp.Deps{
 		Log:    log,
-		Auth:   &rtmp.RepoAuthenticator{Live: live},
+		Auth:   authenticator,
 		Pepper: cfg.IPHashPepper,
 	}, cfg.Host, cfg.LiveRTMPPort)
+
+	deps.RTMPProbe = rtmpSrv
+	paid, err := server.NewPaidEngine(deps, operations)
+	if err != nil {
+		return fmt.Errorf("paid operations: %w", err)
+	}
+	deps.Paid = paid
+	if paid != nil {
+		authenticator.Resolver = paid
+		paidDone := make(chan struct{})
+		go func() { defer close(paidDone); paid.Run(ctx) }()
+		defer func() { stop(); <-paidDone }()
+	}
 	go func() {
 		if err := rtmpSrv.Run(ctx); err != nil {
 			log.Error("rtmp server exited", "err", err)
 		}
 	}()
-	deps.RTMPProbe = rtmpSrv
 	met.AttachRTMPGauge(rtmpSrv.ActivePublishes)
 
 	srv := &http.Server{

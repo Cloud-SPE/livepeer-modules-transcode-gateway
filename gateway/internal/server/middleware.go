@@ -109,7 +109,7 @@ func CORS(allowed []string) func(http.Handler) http.Handler {
 			}
 			if r.Method == http.MethodOptions {
 				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-				w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Admin-Token, Livepeer-Request-Id")
+				w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Admin-Token, Idempotency-Key, Livepeer-Request-Id")
 				w.WriteHeader(http.StatusNoContent)
 				return
 			}
@@ -260,8 +260,8 @@ type RateLimit struct {
 }
 
 type bucket struct {
-	tokens   float64
-	updated  time.Time
+	tokens  float64
+	updated time.Time
 }
 
 func NewRateLimit(perMinute, burst int) *RateLimit {

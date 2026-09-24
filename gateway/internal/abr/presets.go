@@ -7,7 +7,7 @@
 // reads the same presets.yaml the runner uses and exposes a lookup.
 //
 // The YAML is embedded at build time so the gateway is self-contained;
-// re-vendor with `make sync-presets` if the runner ships new presets.
+// Keep it identical to the standalone abr-runner/presets.yaml.
 package abr
 
 import (
@@ -24,7 +24,11 @@ var presetsYAML []byte
 // Rendition is the minimal projection the gateway cares about — names
 // drive the output_urls map keys.
 type Rendition struct {
-	Name string `yaml:"name"`
+	Name  string `yaml:"name"`
+	Video *struct {
+		Width  int `yaml:"width"`
+		Height int `yaml:"height"`
+	} `yaml:"video"`
 }
 
 // Preset is the minimal projection the gateway cares about.

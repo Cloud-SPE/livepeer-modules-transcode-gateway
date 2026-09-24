@@ -18,19 +18,25 @@ func NewCapabilityRepo(pool *pgxpool.Pool) *CapabilityRepo {
 }
 
 type UpsertCapability struct {
-	CapabilityID        string
-	Capability          string
-	Offering            string
-	InteractionMode     string
-	Name                string
-	Description         string
-	Provider            string
-	Category            string
-	EthAddress          string
-	PricePerWorkUnitWei *big.Int
-	BrokerURL           string
-	ExtraJSON           []byte
-	ConstraintsJSON     []byte
+	Protocol              string
+	WorkUnit              string
+	UnitsPerPrice         *big.Int
+	WorkUnitEstimatorJSON []byte
+	JobJSON               []byte
+	SessionJSON           []byte
+	CapabilityID          string
+	Capability            string
+	Offering              string
+	InteractionMode       string
+	Name                  string
+	Description           string
+	Provider              string
+	Category              string
+	EthAddress            string
+	PricePerWorkUnitWei   *big.Int
+	BrokerURL             string
+	ExtraJSON             []byte
+	ConstraintsJSON       []byte
 }
 
 // ReplaceSnapshot upserts every row and marks everything not in this
@@ -49,9 +55,10 @@ func (r *CapabilityRepo) ReplaceSnapshot(ctx context.Context, rows []UpsertCapab
 		INSERT INTO capabilities (capability_id, capability, offering, interaction_mode, name,
 		                          description, provider, category, eth_address,
 		                          price_per_work_unit_wei, broker_url, extra_json,
-		                          constraints_json, active, snapshot_at)
+		                          constraints_json, active, snapshot_at, protocol, work_unit, units_per_price,
+                                  work_unit_estimator_json, job_json, session_json)
 		VALUES ($1, $2, $3, NULLIF($4,''), NULLIF($5,''), NULLIF($6,''), NULLIF($7,''),
-		        NULLIF($8,''), NULLIF($9,''), $10, NULLIF($11,''), $12, $13, true, now())
+		        NULLIF($8,''), NULLIF($9,''), $10, NULLIF($11,''), $12, $13, true, now(), $14, $15, $16, $17, $18, $19)
 		ON CONFLICT (capability_id) DO UPDATE SET
 		  capability=EXCLUDED.capability,
 		  offering=EXCLUDED.offering,
@@ -65,13 +72,20 @@ func (r *CapabilityRepo) ReplaceSnapshot(ctx context.Context, rows []UpsertCapab
 		  broker_url=EXCLUDED.broker_url,
 		  extra_json=EXCLUDED.extra_json,
 		  constraints_json=EXCLUDED.constraints_json,
+          protocol=EXCLUDED.protocol,
+          work_unit=EXCLUDED.work_unit,
+          units_per_price=EXCLUDED.units_per_price,
+          work_unit_estimator_json=EXCLUDED.work_unit_estimator_json,
+          job_json=EXCLUDED.job_json,
+          session_json=EXCLUDED.session_json,
 		  active=true,
 		  snapshot_at=now()`
 	for _, c := range rows {
 		if _, err := tx.Exec(ctx, up,
 			c.CapabilityID, c.Capability, c.Offering, c.InteractionMode, c.Name,
 			c.Description, c.Provider, c.Category, c.EthAddress,
-			stringifyBig(c.PricePerWorkUnitWei), c.BrokerURL, c.ExtraJSON, c.ConstraintsJSON); err != nil {
+			stringifyBig(c.PricePerWorkUnitWei), c.BrokerURL, c.ExtraJSON, c.ConstraintsJSON,
+			c.Protocol, c.WorkUnit, stringifyBig(c.UnitsPerPrice), c.WorkUnitEstimatorJSON, c.JobJSON, c.SessionJSON); err != nil {
 			return err
 		}
 	}
@@ -81,7 +95,8 @@ func (r *CapabilityRepo) ReplaceSnapshot(ctx context.Context, rows []UpsertCapab
 func (r *CapabilityRepo) ListActive(ctx context.Context) ([]Capability, error) {
 	const q = `SELECT capability_id, capability, offering, interaction_mode, name, description,
 	                  provider, category, eth_address, price_per_work_unit_wei, broker_url,
-	                  extra_json, constraints_json, active, snapshot_at
+	                  extra_json, constraints_json, active, snapshot_at, protocol, work_unit, units_per_price,
+                      work_unit_estimator_json, job_json, session_json
 	           FROM capabilities WHERE active=true ORDER BY capability, offering`
 	rows, err := r.pool.Query(ctx, q)
 	if err != nil {
@@ -145,10 +160,11 @@ func (r *CapabilityRepo) RecordRefresh(ctx context.Context, outcome string, errM
 
 func scanCapability(s pgx.Row) (*Capability, error) {
 	var c Capability
-	var price *string
+	var price, units *string
 	err := s.Scan(&c.CapabilityID, &c.Capability, &c.Offering, &c.InteractionMode, &c.Name,
 		&c.Description, &c.Provider, &c.Category, &c.EthAddress, &price, &c.BrokerURL,
-		&c.ExtraJSON, &c.ConstraintsJSON, &c.Active, &c.SnapshotAt)
+		&c.ExtraJSON, &c.ConstraintsJSON, &c.Active, &c.SnapshotAt,
+		&c.Protocol, &c.WorkUnit, &units, &c.WorkUnitEstimatorJSON, &c.JobJSON, &c.SessionJSON)
 	if err != nil {
 		return nil, err
 	}
@@ -157,6 +173,10 @@ func scanCapability(s pgx.Row) (*Capability, error) {
 		if _, ok := b.SetString(*price, 10); ok {
 			c.PricePerWorkUnitWei = b
 		}
+	}
+	if units != nil {
+		c.UnitsPerPrice = new(big.Int)
+		c.UnitsPerPrice.SetString(*units, 10)
 	}
 	return &c, nil
 }

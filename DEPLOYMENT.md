@@ -1,290 +1,153 @@
 # Deployment
 
-Operator-facing runbook for deploying the Livepeer Video Gateway to a
-real environment. Pairs with [`README.md`](./README.md) (dev
-quickstart) and
-[`docs/design-docs/boot-sequence.md`](./docs/design-docs/boot-sequence.md)
-(what runs at startup).
+The gateway serves HTTP and embedded SPAs on port 4000 and public RTMP on
+port 1935. Traefik or another reverse proxy terminates HTTPS. Postgres and
+MinIO remain private except for the public S3 endpoint required by browsers
+and runners. LOC and Modules v2 brokers/runners are external services.
 
-If you only want to bring up dev: that's `make dev` per the README.
-This doc is for production.
+## Upgrading from the legacy gateway
 
----
+Drain ABR work, live sessions, and unsettled LOC reservations using the old
+binary before upgrading. Back up Postgres and both persistent keys before
+starting the new image. The v2 gateway refuses startup with legacy active
+paid work rather than guessing how to settle it under a different protocol.
+Do not erase reservation state to bypass this guard.
 
-## Topology
+Build a new gateway image from this checkout and deploy matching v2 runner
+and broker images. Changing the tag to an old published `v1.4.1` image does
+not deploy this migration. Database migrations apply on startup, including
+durable paid operations and the v2 capability catalog. A schema downgrade
+cannot convert v2 active operations back to the legacy wire contract.
 
-A single-host or single-pod deployment. The gateway binary serves the
-API, the three SPAs (embedded), `/health`, and `/metrics` from one port
-(default `4000`), and the public RTMP listener on `:1935`:
+The catalog is invalidated during migration and repopulated from LOC. Check
+that the advertised offerings include `paid-job/v1` for ABR and
+`paid-session/v1` for live, along with their work units, price denominators,
+estimator and job/session axes. Capability names alone do not prove protocol
+compatibility.
 
-```
-                ┌────────────────────────────────────────┐
-  internet ──►  │  reverse proxy (Traefik / nginx / LB)  │
-                └────┬───────────────────┬───────────────┘
-                     │ HTTP              │ ingest.*
-                     │ (api + SPAs +     │ (HLS read)
-                     │  /health + /metrics)
-                     ▼                   ▼
-                ┌────────┐           ┌────────┐
-                │gateway │           │ minio  │
-                │  :4000 │ ──S3+STS─►│  :9000 │
-                │  :1935 │ ◄──RTMP── │ :9001  │
-                └───┬────┘           └────────┘
-                    │  ▲
-                    │  └── OBS / ffmpeg push RTMP to :1935
-        ┌───────────┴──────────────┐
-        │                          │
-        ▼                          ▼
-   ┌─────────┐            ┌──────────────────────┐
-   │ postgres│            │ LOC clearinghouse    │
-   │  :5432  │            │ loc.cloudspe.com      │
-   └─────────┘            │ (HTTPS, pymth_ key)   │
-                          └──────────────────────┘
-```
+## Secrets and configuration
 
-The gateway reaches LOC over plain HTTPS using an operator-issued
-`pymth_` API key. There are no local UDS daemons, no `livepeer-run`
-volume, and no operator keystore: LOC mints payment envelopes, selects
-routes, settles the ledger, and serves the capability catalog.
+Use a secret manager or the gitignored `.env` file. Preserve these values
+across container replacement and database restore:
 
----
+| Setting | Value / generation |
+|---|---|
+| `LOC_BASE_URL`, `LOC_API_KEY` | LOC endpoint and funded operator-issued API key |
+| `LOC_CALLER_PRIVATE_KEY` | 32-byte secp256k1 scalar as 64 hex characters; `openssl rand -hex 32` |
+| `OPERATION_SECRETS_KEY` | 32-byte AES-GCM key as base64; `openssl rand -base64 32` |
+| `ADMIN_TOKEN`, `API_KEY_HASH_PEPPER`, `IP_HASH_PEPPER`, `METRICS_TOKEN` | Independently generated secrets; `openssl rand -hex 32` |
+| `POSTGRES_PASSWORD`, `MINIO_ROOT_PASSWORD`, `S3_SECRET_ACCESS_KEY` | Independent strong storage credentials |
+| `RESEND_API_KEY`, `FROM_EMAIL` | Email delivery configuration |
 
-## Pre-flight checklist
-
-- [ ] Domain DNS records pointing at the host (e.g. `app.*` or split
-      `api.*`/`portal.*`/`admin.*`, plus `ingest.*` for HLS playback and
-      optionally `metrics.*`).
-- [ ] TLS — Let's Encrypt or your CA of choice.
-- [ ] Postgres data volume backed by durable storage.
-- [ ] MinIO data volume backed by durable storage **with enough
-      headroom for VOD uploads + live HLS output** (size to your traffic).
-- [ ] Public RTMP TCP port 1935 reachable (or set `LIVE_RTMP_PORT=0` to
-      disable live ingest).
-- [ ] A LOC (Livepeer Open Clearinghouse) account: an operator-issued
-      `pymth_` API key (`LOC_API_KEY`) and a funded credit balance on
-      LOC. See **LOC onboarding** below.
-- [ ] Resend account + API key (or commit to running without email).
-- [ ] A copy of `.env.example` with every value filled, including
-      `S3_*` and `MINIO_*`.
-- [ ] Backups configured (Postgres dumps + MinIO bucket replication via `mc mirror`).
-
----
-
-## Secrets provisioning
-
-| Var | Why | Suggested generation |
-|---|---|---|
-| `POSTGRES_PASSWORD` | Postgres role auth. | `openssl rand -base64 32` |
-| `ADMIN_TOKEN` | Admin credential. | `openssl rand -hex 32` |
-| `API_KEY_HASH_PEPPER` | Pepper for API key SHA-256. | `openssl rand -hex 32` |
-| `IP_HASH_PEPPER` | Pepper for IPs / verification / session / stream-key hashes. | `openssl rand -hex 32` |
-| `METRICS_TOKEN` | Bearer token on `/metrics`. | `openssl rand -hex 32` |
-| `MINIO_ROOT_PASSWORD` | MinIO root credential. | `openssl rand -base64 32` |
-| `S3_SECRET_ACCESS_KEY` | MinIO-issued access key for the gateway. | `openssl rand -hex 32` |
-| `LOC_API_KEY` | Operator `pymth_` key authorizing the gateway against LOC. | issued by the LOC operator |
-| `RESEND_API_KEY` | Email delivery. | from Resend dashboard |
-| `RESEND_BASE_URL` | Optional resend-go SDK base URL override for proxies or mocks. | `https://api.resend.com/` |
-
-Keep secrets out of git. Use the compose `.env` (git-ignored) or a
-secret manager.
-
----
-
-## LOC onboarding
-
-The gateway no longer runs its own payer/resolver daemons or holds an
-operator keystore. Payments and routing are delegated to **LOC — the
-Livepeer Open Clearinghouse** (hosted at `https://loc.cloudspe.com`).
-
-1. **Get a key.** Ask the LOC operator for a `pymth_` API key scoped to
-   your account. Set it as `LOC_API_KEY`. Point `LOC_BASE_URL` at the
-   clearinghouse (default `https://loc.cloudspe.com`).
-2. **Fund the balance.** Credit is held and managed *on LOC*, not in a
-   local wallet. Top up your account's balance through the LOC operator
-   / LOC admin before going live; the gateway encumbers worst-case
-   credit at job-create time and releases the unused remainder on
-   settle.
-3. **Monitor on LOC.** Balance, encumbrance, and per-job/per-session
-   ledger reconciliation are observable in the LOC admin — that ledger
-   is authoritative. The gateway's `usage_reservations` /
-   `live_streams` tables are its local view; LOC is the source of truth
-   for what was billed.
-
-If `LOC_API_KEY` is unset, `/api/v1/abr` and `/api/v1/live` fail closed
-with `503 loc_unavailable`; the SaaS shell (waitlist, portal, admin)
-still runs.
-
----
-
-## Bringing the gateway online
-
-```bash
-# 1. clone + env
-git clone <repo>
-cd livepeer-modules-transcode-gateway
-cp .env.example .env
-$EDITOR .env  # fill every required value
-
-# 2. build
-docker compose build gateway
-
-# 3. db + minio + bootstrap + gateway
-make dev
-```
-
-Make sure `LOC_BASE_URL` + `LOC_API_KEY` are set in `.env` before you
-exercise `/api/v1/abr` or `/api/v1/live` — without them those endpoints
+The signing and encryption keys are required whenever `LOC_API_KEY` is set.
+Losing the encryption key makes persisted recovery credentials unreadable;
+changing the signing key during active work changes caller identity. Drain
+work before rotating either key and retain the old keys with backups.
+Without LOC configured, the SaaS shell remains usable and paid endpoints
 return `503 loc_unavailable`.
 
-After startup the gateway is real. Don't ship to users until you've
-done end-to-end validation:
+For a single-domain deployment like the supplied Traefik stack:
 
-1. **Sign up a test user** through the real flow (waitlist → verify →
-   admin approve → API key emailed).
-2. **Confirm `/api/v1/capabilities`** returns a non-empty catalog. Empty →
-   LOC catalog is empty or unreachable; check the gateway's
-   capability-refresh logs and `/health`'s `loc` check.
-3. **POST `/api/v1/abr`** with a sample MP4 URL or via the
-   `/api/v1/abr/upload-url` flow against MinIO. Expect a `job_id` +
-   `master_playlist_url`. Wait for the runner to finish, then play the
-   master playlist in a player.
-4. **POST `/api/v1/live`** → push RTMP to the returned ingest URL
-   (`rtmp://<gateway>:1935/live/<key>`) using OBS or
-   `ffmpeg -re -i input.mp4 -c copy -f flv rtmp://…/<key>`. Confirm the
-   returned HLS URL plays back. `DELETE /api/v1/live/:id` (OBS should
-   see the disconnect within ~2s because the gateway closes the RTMP
-   socket synchronously).
-5. **Confirm `usage_reservations`** committed for both flows; `live_streams`
-   shows `status='ended'` after deletion.
+```dotenv
+BASE_URL=https://video-demo.cloudspe.com
+PUBLIC_SITE_URL=https://video-demo.cloudspe.com
+PUBLIC_PORTAL_URL=https://video-demo.cloudspe.com/portal/
+ALLOWED_ORIGINS=https://video-demo.cloudspe.com
+S3_ENDPOINT=http://minio:9000
+S3_PUBLIC_ENDPOINT=https://video-s3-demo.cloudspe.com
+MINIO_API_CORS_ALLOW_ORIGIN=https://video-demo.cloudspe.com
+LIVE_RTMP_PORT=1935
+LIVE_RTMP_HOST_PORT=1935
+LIVE_EXTERNAL_RTMP_URL=rtmp://video-demo.cloudspe.com:1935/live
+```
 
----
+Pass the new key and policy variables through your production Compose
+`gateway.environment` section; setting them only in `.env` is insufficient
+when the service does not forward them. The repository Compose file shows
+all required pass-throughs. Traefik must join the gateway's Docker network;
+its HTTP route targets port 4000, and the S3 route targets MinIO port 9000.
+Publish RTMP as TCP or an L4 proxy; an HTTPS router does not carry RTMP.
 
-## TLS termination
+The Compose mapping uses container port 1935 even when the listener is
+disabled with `LIVE_RTMP_PORT=0`. Remove the port mapping to avoid publishing
+RTMP at all. If changing the internal listener port, change the mapping too.
 
-The gateway speaks plain HTTP. Put a reverse proxy in front. Same
-shape as `livepeer-modules-openai/DEPLOYMENT.md`; the only delta:
-front MinIO at `ingest.*` so HLS viewers can fetch directly, and pass
-RTMP traffic on TCP `:1935` either directly or via an L4 proxy (RTMP
-is not HTTP — most reverse proxies need a stream/TCP rule for it).
+## Workload policy and units
 
-Disable buffering on `/api/v1/live/*` if you ever add streaming responses
-(today: poll-only, fine with default buffering).
+| Setting | Default | Meaning |
+|---|---|---|
+| `ABR_OFFERING` | `abr-default` | Advertised ABR offering |
+| `ABR_MAX_TOTAL_UNITS` | `1000000` | Hard authorization ceiling in `video-frame-megapixel` |
+| `ABR_JOB_TIMEOUT_SECS` | `3600` | ABR execution deadline |
+| `LIVE_GATEWAY_INGEST_OFFERING` | `gateway-ingest` | Advertised live offering |
+| `LIVE_MAX_TOTAL_UNITS` | `6000` | Lifetime cap in whole `output_seconds` |
+| `LIVE_OUTPUT_PROFILE` | `live-standard` | Runner output profile |
+| `LIVE_METERING_RENDITION` | `720p` | Rendition used for finalized output metering |
+| `LIVE_RECONCILE_INTERVAL_SECS` | `30` | Positive live reconciliation cadence; zero is invalid |
+| `LIVE_TOPUP_RUNWAY_THRESHOLD_SECS` | `60` | Remaining runway at which to request a refill |
+| `LIVE_TOPUP_FUND_SECS` | `60` | Additional output seconds requested per refill |
 
----
+Do not carry forward the old live default of `6000000`: it represented a
+millisecond-style estimate and grants a much larger cap in whole seconds.
+LOC quotes use `price_per_work_unit_wei / units_per_price`; preserve the
+denominator when inspecting prices. Actual settlement comes from signed
+broker evidence, not these limits or elapsed time.
 
-## SPA hosting
+The recovery scheduler scans durable operations every two seconds and cannot
+be disabled. Live reconciliation requires a positive interval. The former
+`SETTLE_JANITOR_INTERVAL_SECS` and `LIVE_IDLE_TIMEOUT_SECS` are removed;
+idle-timeout policy belongs to the runner.
 
-The three SPAs are **embedded into the gateway binary** via `//go:embed`
-under `gateway/internal/server/webroot/`. `make embed-webroot` (also run
-by the Dockerfile) copies `web/{site,portal,admin}` into that path before
-`go build`, so there's no separate static-host or CDN step. Production
-serves `/`, `/portal/`, and `/admin/` from the same port as the API.
+Live HLS playback is supplied by the `rtmp-hls/v1` runner descriptor. The
+runner's public HLS endpoint and ingest endpoint must be reachable from the
+appropriate clients and gateway. `LIVE_PLAYBACK_BASE_URL` and
+`LIVE_S3_CREDENTIAL_TTL_HOURS` are legacy settings, not v2 live configuration.
+The current runner defaults to ten-minute ingest keys and one-hour issuance
+grants. The gateway renews an expired key on encoder reconnect, without
+rotating keys during an active publication. A reconnect after the grant has
+expired ends the old session with `recovery_failed` and
+`stream_key_grant_expired`; create a new session. An already connected
+publisher is not interrupted merely because its key expires.
 
-If you want to front the SPAs with a CDN, point the CDN at the gateway
-host; cache `*.js`/`*.css` aggressively and the HTML lightly.
+MinIO remains the VOD input and ABR artifact store. Anonymous read in the
+sample bootstrap is a deployment policy choice for those artifacts; set
+retention and access policies appropriate to your deployment.
 
-Branding: edit `web/site/index.html` + `web/site/index.css` and rebuild.
-No gateway code touches.
+## Bring-up and acceptance
 
----
+Build with `docker compose build gateway`, then start with `make dev` or your
+production Compose equivalent. Check `/health`, startup migrations, LOC
+catalog refresh, and storage reachability. Exercise the real signup/approval
+flow to obtain a customer API key.
 
-## MinIO in production
+Submit a short VOD input, poll the returned job status, and verify that the
+completed master playlist and variants play. Confirm the LOC ledger agrees
+with signed measured units. Open live, push RTMP to the returned server URL
+and key, verify HLS playback, then stop and confirm terminal status and final
+settlement. Exercise refill and restart recovery with controlled workloads
+before allowing customers onto the deployment. Local unit and contract tests
+do not substitute for a funded end-to-end test on the deployed network.
 
-- **Storage class.** MinIO data lives in `video-gateway-minio-data`.
-  Mount this on durable storage (EBS, GCE PD, ZFS).
-- **Object lifecycle.** Set a TTL on `abr/` and `live-out/` prefixes
-  — the runner reads VOD inputs once, and HLS segments are throwaway
-  once the session ends. Configure lifecycle via `mc ilm import` or
-  the standard S3 API.
-- **Backups.** Replicate the bucket via `mc mirror` (or MinIO's
-  built-in bucket replication) to off-site storage if VOD originals
-  must be retained.
-- **CORS.** The MinIO compose service is configured via the
-  `MINIO_API_CORS_ALLOW_ORIGIN` env var; no separate CORS-bootstrap
-  container.
-- **STS.** Per-live-session credentials are minted via STS
-  `AssumeRole` with an inline policy scoped to
-  `live-out/<api_key>/<live_id>/*`. The runner only gets write access
-  to its own session's prefix. Confirm STS is reachable from the
-  gateway with `mc admin info` and that the bucket policy permits
-  the gateway's service-account access key to call `AssumeRole`.
-- **Public read.** Dev compose leaves the bucket anonymous-read so
-  the runner and viewers can pull. In production, restrict to runner
-  IPs or use signed download URLs (tracked in tech-debt-tracker).
+Keep one gateway instance per deployment until distributed session ownership
+and rate limiting are validated. Monitor operation recovery/settlement
+backlogs and terminal errors as well as HTTP failures; a successful HTTP
+submission alone does not prove a finished transcode.
 
----
+## Backups and operation recovery
 
-## Postgres backup + restore
-
-Logical backups daily, shipped off-host:
+Back up Postgres, retained MinIO objects, and the two persistent keys. A
+Postgres backup can be created with:
 
 ```bash
 docker compose exec -T db pg_dump -U video_gateway \
-  --format=custom \
-  video_gateway > video_gateway-$(date +%F).pgdump
+  --format=custom video_gateway > video_gateway.pgdump
 ```
 
-Restore:
+Test restores in an isolated environment. Stop the gateway during a real
+restore, restore matching keys, then let its durable recovery loop reconcile
+LOC and broker state. Never turn an ambiguous dispatch into a zero-unit
+refund or delete its operation record as a repair shortcut.
 
-```bash
-docker compose stop gateway
-docker compose exec db psql -U video_gateway -c \
-  "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
-docker compose exec -T db pg_restore -U video_gateway -d video_gateway \
-  < video_gateway-2026-05-19.pgdump
-docker compose start gateway
-```
-
-Migrations live in `gateway/migrations/`. Applied at boot by
-`golang-migrate`, recorded in `schema_migrations`, idempotent.
-
----
-
-## Metrics
-
-Prometheus scrapes `/metrics`. Surfaces:
-
-- Go runtime metrics under prefix `video_gateway_*`
-- `video_gateway_http_requests_total{method,route,status}`
-- `video_gateway_http_request_duration_seconds`
-- `video_gateway_proxy_reservations_total{capability,outcome}`
-- `video_gateway_live_streams_active`
-- `video_gateway_waitlist_signups_total`
-
-Recommended starter alerts:
-
-- 5xx rate above 1% sustained 5 min on `/api/v1/*`
-- `proxy_reservations_total{outcome="refunded"}` rising sharply vs `committed`
-- `503 loc_unavailable` on `/api/v1/*` (LOC unreachable — fail-closed)
-- `live_streams_active` flatlining when ingest should be flowing
-- Reservations accumulating in `settle_state='pending'` (settle janitor
-  not draining — LOC settle calls failing)
-
----
-
-## Common failure modes
-
-| Symptom | Likely cause | Where to look |
-|---|---|---|
-| `/health` shows `db: error` | Postgres down or wrong DATABASE_URL | `docker compose logs db` |
-| `/health` shows `minio: error` | minio container down, or bootstrap failed | `docker compose logs minio minio-bootstrap` |
-| `/health` shows `rtmp: error` | RTMP listener didn't bind to `LIVE_RTMP_PORT` (port in use, perms) | `docker compose logs gateway` |
-| `/health` shows `loc: error` | LOC unreachable, `LOC_BASE_URL` wrong, or `LOC_API_KEY` invalid/expired | gateway logs; curl `LOC_BASE_URL/v1/capabilities` with the key |
-| `/api/v1/abr` or `/api/v1/live` returns `503 loc_unavailable` | `LOC_API_KEY` unset, LOC down, or out of credit balance | gateway logs; LOC admin (balance) |
-| `/api/v1/capabilities` returns `data: []` | LOC catalog empty or last refresh failed | gateway capability-refresh logs; wait one refresh cycle |
-| `/api/v1/abr/upload-url` returns 503 | MinIO unreachable or credentials wrong | `docker compose logs minio gateway` |
-| Live stream ends with `close_reason=rotation_unrecoverable` | A refill hit broker `INVALID_RECIPIENT_RAND`; retried once then ended gracefully. LOC exposes no rotation-recovery primitive yet (known limitation). | gateway live-reconciler logs |
-| RTMP push immediately drops | Stream key didn't match `live_streams.stream_key_hash`, or upstream broker tore down session | Broker logs (operator side) + gateway logs filtered by `live_id` |
-| Verification emails not arriving | RESEND_API_KEY missing/invalid | gateway logs — `verification email send failed` |
-| `/api/v1/abr` jobs sit at `processing` forever, never produce `master.m3u8` | Almost always orchestrator-side: runner's CUDA toolkit > host's NVIDIA driver, or unpatched NVENC session cap exhausted. Gateway is blind because the broker doesn't pass-through runner status. | [`docs/troubleshooting/runner-cuda-driver-mismatch.md`](./docs/troubleshooting/runner-cuda-driver-mismatch.md) |
-
----
-
-## What this runbook does NOT cover (v1)
-
-- **Multi-replica deploys** with shared session state / rate limits.
-- **Blue-green / canary** rollouts.
-- **Automatic backups.**
-- **DDoS protection** (front-edge concern).
-- **Multi-region.**
-- **Gateway-side playback proxy** (out of v1 scope).
+Tasks, validation findings and deployment follow-ups belong in Beads; see
+[PLANS.md](PLANS.md). No deployment, image publish or paid network test is
+implied by editing the local repositories.

@@ -20,7 +20,6 @@ Together they're under 600 lines.
 # Go toolchain (1.25+) and Node 24 + pnpm 10 required.
 pnpm install
 make dev               # gateway + db + minio + bootstrap
-make dev-livepeer      # adds payer + resolver daemons
 
 # Run the three SPAs (each in its own terminal, or one command)
 make web
@@ -32,35 +31,79 @@ make smoke
 You don't need a Resend account for local dev. When `RESEND_API_KEY`
 is unset, verification + API-key emails are logged to stdout.
 
-For a fully working `/api/v1/*` stack you do need: chain RPC, registry
-address, payer keystore. This repo is on-chain only; there is no
+For a fully working `/api/v1/*` stack you need a funded LOC API key and
+v2-compatible network brokers and runners. This repo is on-chain only; there is no
 local fallback broker mode.
 
 ---
 
+## Local contract and recovery tests
+
+CI runs Go tests with the race detector and a disposable PostgreSQL 16 service.
+The paid-operation integration tests apply the real migrations to a unique
+schema per test, use local HTTP fixtures for LOC/brokers, and remove their
+schemas afterward. They do not spend funds or connect to production.
+
+To run them locally, point `TEST_DATABASE_URL` at a disposable database whose
+user can create schemas and extensions, then run:
+
+```bash
+make embed-webroot
+cd gateway
+TEST_DATABASE_URL='postgres://postgres@127.0.0.1:5432/gateway_test?sslmode=disable' \
+  go test -race ./...
+```
+
+Without `TEST_DATABASE_URL`, database integration tests explicitly skip;
+unit tests still run. This is separate from `make smoke`, which exercises a
+running deployment. The integration suite covers persisted request identity,
+concurrent retries, tenant boundaries, encrypted recovery material, signed
+evidence rejection, lost responses, live refill/stop, and worker isolation.
+
+## Running end-to-end checks against local services
+
+`scripts/e2e.py` exercises actual HTTP endpoints and uses logged development
+emails to complete signup, verification and approval. Set `RESEND_API_KEY` empty;
+the harness refuses real email delivery. It requires Python 3, Docker and FFmpeg.
+The environment file must contain the local administrator and metrics tokens.
+Secrets and resumable test identities are saved under gitignored `.dev/e2e/`.
+
+```bash
+python3 scripts/e2e.py --phase shell
+python3 scripts/e2e.py --phase abr
+python3 scripts/e2e.py --phase live
+```
+
+Defaults target `http://localhost:14000`, `.env.e2e.local`, and Docker container
+`vgw-e2e-gateway`; override `--url`, `--env-file`, `--container`, or `--state-dir`
+for another local deployment. The shell phase checks the apps, authentication,
+key revocation, namespace isolation, metrics and an S3 upload/download roundtrip.
+It reports dependency health separately; a passing shell phase does not certify
+LOC availability.
+
+The explicit ABR/live phases use real LOC credit and real network runners.
+ABR uses a three-second generated input and verifies returned HLS artifacts
+and signed accounting. Live publication is bounded to 35 seconds, verifies HLS
+segments, then requests stop in a `finally` block. Repeated ABR execution reuses
+the same idempotency key; it does not intentionally start another paid job.
+A live admission failure can leave an unknown LOC issuance outcome: retain its
+journal and stop request until authoritative recovery finishes. Never replace
+that identity or clear database rows to make a test appear successful.
+
 ## How work lands
 
-### Small changes — go straight to a PR
-
-Bug fixes, doc tweaks, single-file refactors, anything <50 lines.
-
-### Non-trivial changes — write an exec plan first
-
-Open the plan at `docs/exec-plans/active/NNNN-slug.md`, following
-the template in [`PLANS.md`](./PLANS.md). Land the plan first (small
-PR, mostly markdown), then implement. On completion, append a
-`## Outcome` section and `git mv` to `docs/exec-plans/completed/`.
-
-"Non-trivial" includes: new HTTP endpoints, schema changes,
-cross-component refactors, new dependencies, anything you're not sure
-how to scope.
+Create and claim a Bead before every change. Use `bd prime` and the
+[project Beads skill](.agents/skills/beads/SKILL.md), with the workflow in
+[PLANS.md](PLANS.md). Non-trivial work uses an epic and dependency edges;
+keep design rationale in `docs/design-docs/` linked to the bead. Do not
+maintain Markdown task lists or execution-plan status alongside Beads.
 
 ---
 
 ## What good code looks like here
 
 - **Boring technology.** Postgres. Go stdlib + chi + huma. pgx. sqlc.
-  Lit. esm.sh. If you reach for an exotic dep, write a plan.
+  Lit. esm.sh. If you reach for an exotic dep, record the rationale in the bead and design docs.
 - **Strict types.** Go's compiler is the lint gate. `go vet ./...`
   must pass. Avoid `interface{}` / `any` outside narrow boundaries.
 - **Light DOM.** See [`FRONTEND.md`](./FRONTEND.md): no shadow DOM,
@@ -80,7 +123,7 @@ how to scope.
 - **`gateway/internal/proxy/livepeer/`** and **`gateway/internal/proxy/service/`**.
   These are load-bearing wire mechanics ported from the upstream
   `livepeer-network-modules` ecosystem. Divergence is expensive. If
-  you need to change them, write an exec plan first.
+  you need to change them, create a bead and document the wire-contract rationale first.
 - **The Livepeer wire spec.** Owned by `livepeer-network-protocol`
   upstream, not here.
 
@@ -93,7 +136,7 @@ how to scope.
   - `gateway: add /api/admin/live-streams CSV export`
   - `docs: tighten core-beliefs §3 wording`
 - Body wraps ~72 chars; explains *why*.
-- Link issues / plan files as relative paths from repo root.
+- Reference Bead IDs and link design documents as relative paths from repo root.
 - We do **not** use Co-Authored-By trailers in this repo.
 
 ---

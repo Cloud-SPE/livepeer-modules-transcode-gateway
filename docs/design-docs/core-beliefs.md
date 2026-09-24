@@ -2,14 +2,15 @@
 
 The non-negotiable invariants of this codebase. Anything that violates
 these is a bug, not a tradeoff. Updating one of these requires an
-exec plan that explains *why* and lands the rule change atomically
+Bead and design note that explain *why* and lands the rule change atomically
 with the code change.
 
 ---
 
 ## 1. The repo is the system of record
 
-If it isn't checked in, it doesn't exist. No Google Docs of
+Code and design rationale are checked in; work status and dependencies live
+in Beads and synchronize through Dolt. No Google Docs of
 load-bearing intent. No Slack threads as the source of truth for a
 design decision. Discussions promote into docs or they evaporate.
 
@@ -19,46 +20,36 @@ We pick boring, well-documented, small-surface-area dependencies
 (Postgres, chi, huma, pgx, sqlc, Lit, esm.sh, MinIO) because agents
 reason better about them and the runtime model is predictable.
 
-Reaching for an exotic dependency is a signal to write a plan and
+Reaching for an exotic dependency is a signal to create a Bead and
 justify the choice.
 
 ## 3. The wire spec is product-agnostic
 
-Anything in `gateway/internal/proxy/livepeer/` and
-`gateway/internal/proxy/service/` only knows about
-`Livepeer-Capability`, `Livepeer-Payment`, broker interaction modes,
-and route candidates. It never knows about transcode-specific
-concepts. Mapping "user wants an ABR ladder" → "capability =
-`livepeer:transcode/abr-ladder`, mode = http-reqresp" lives in
-`gateway/internal/proxy/{abr,live}.go`.
-
-The wire layer is the shared piece across this gateway and
-`livepeer-modules-openai`. Diverging it bites both repos.
+LOC and broker clients implement `paid-job/v1` and `paid-session/v1`,
+spend authorization, delegated caller proof, and signed settlement evidence.
+They do not invent transcode semantics. ABR workload bodies and RTMP/HLS
+session descriptors are mapped at the product boundary. Capability protocol,
+work unit, estimator, axes, and price denominator come from LOC discovery.
 
 ## 4. The SaaS shell is product-agnostic
 
 Auth, waitlist, sessions, admin, API-key minting are the same code as
 the openai gateway. We don't fork them per product surface.
 
-## 5. The gateway pays the network exactly once per attempted upstream call
+## 5. Authorize once; settle measured evidence
 
-- For VOD: a payment envelope is minted per broker attempt. Failover
-  to a second broker mints a second envelope.
-- For live: a payment envelope is minted at session-open;
-  interim-debits happen through the payment-daemon over the session
-  lifetime. There is no "free idle" — when balance hits zero, the
-  broker tears down ingest.
+Persist a stable workload, idempotency key, and caller identity before network
+side effects. LOC owns network funding; the gateway signs delegated caller
+proofs. Settle broker-signed measured evidence, never an estimate or elapsed
+wall-clock guess. Ambiguous dispatch outcomes stay recoverable and must not
+be interpreted as proof that zero work occurred.
 
-There is exactly one payment-minting code path
-(`gateway/internal/proxy/livepeer/payment.go`). Surfaces that want
-payments call into it.
+## 6. Transcoding belongs to runners
 
-## 6. Media bytes never traverse the gateway
-
-The gateway signs URLs and tracks reservations. It does not buffer
-video. It does not run FFmpeg. It does not parse HLS playlists at
-request time. All of that is broker + runner side. Violating this is
-a signal that scope has crept and we should reconsider.
+VOD media and HLS outputs move directly between object storage and runners.
+The gateway does not run FFmpeg. Gateway-owned live ingress is the explicit
+exception: its RTMP listener relays media to the runner endpoint in the
+advertised session descriptor, preserving a stable customer ingest URL.
 
 ## 7. On-chain only, no static overlays
 
@@ -81,14 +72,13 @@ huma validates HTTP bodies via struct-tag → JSON Schema. envconfig
 validates env vars at startup. Internal code trusts internal types.
 No defensive validation deep in the call stack — that's noise.
 
-## 10. Plans are first-class
+## 10. Beads is the work graph
 
-Non-trivial work writes a plan first under
-`docs/exec-plans/active/NNNN-slug.md`. The plan is mostly markdown,
-lands quickly, and gets implemented against. Completion = `git mv`
-to `completed/`.
-
-The plan template is in [`PLANS.md`](../../PLANS.md).
+Create and claim a described Bead before edits. Beads owns all task status,
+debt, dependencies, acceptance, and handoffs. Design documents preserve
+rationale and reference Bead IDs; they do not duplicate the work queue.
+Historical execution plans remain archives. Run `bd prime` on session start
+and context recovery. See [PLANS.md](../../PLANS.md).
 
 ## 11. Throughput over ceremony
 
@@ -102,7 +92,7 @@ environment this would be irresponsible. Here it's correct.
 
 A new entry in this file requires:
 
-1. A note in the corresponding exec plan describing the trigger.
+1. A note in the corresponding Bead describing the trigger.
 2. Cross-reference from at least one design-doc or product-spec that
    depends on it.
 3. Reviewer sign-off — this is the file that changes the rules.
@@ -110,4 +100,4 @@ A new entry in this file requires:
 ## Retiring a belief
 
 Same process in reverse. If a rule has stopped earning its keep,
-write a plan that removes it and explains why.
+record the change and rationale in a Bead and design document.

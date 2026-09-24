@@ -12,12 +12,12 @@ evolves.
 | `/api/admin/*` | `X-Admin-Token` header | Env-var token. No admin user table — see ["What `ADMIN_TOKEN` is and is not"](#what-admin_token-is-and-is-not). |
 | `/api/public/waitlist` | None (public) | Validated, rate-limited per IP-hash (5 signups / hour). |
 | `/api/public/verify` | None (public) | Single-use, expiring token in the URL. |
-| `/api/webhooks/abr` | HMAC + per-job secret | Runner callback for ABR job status; secret minted at dispatch time. |
+| Broker terminal evidence | Signed settlement evidence | v2 completion and settlement authority; a legacy callback is not settlement proof. |
 | `/openapi.json`, `/docs` | None (app-layer) | Gate behind reverse-proxy auth in production. |
 | `/metrics` | Bearer token (optional) | Stays at root for Prometheus convention. If `METRICS_TOKEN` is set, requires `Authorization: Bearer <token>`. |
 | `/health` | None | Stays at root for load-balancer convention. |
 | RTMP `:1935` | Per-stream key (peppered SHA-256 in `live_streams.stream_key_hash`) | Gateway is the public RTMP endpoint; valid stream key required to publish; broker authenticates the gateway's upstream relay independently. |
-| MinIO direct access | S3 access key (gateway-only) + per-session STS creds (runners) | The gateway holds the only long-lived S3 access key. VOD: clients PUT via presigned URLs. Live: the runner gets short-lived STS creds scoped to `live-out/<api_key>/<live_id>/*` only. |
+| MinIO direct access | S3 credentials and scoped presigned URLs | VOD inputs and ABR artifacts. Live HLS comes from the runner descriptor. |
 
 ## API key lifecycle
 
@@ -74,15 +74,6 @@ rate_limit_exceeded` with `Retry-After`. Reservation NOT opened.
 - The gateway is the only holder of the long-lived S3 access key with
   full PUT/GET/DELETE rights. Clients PUT only via gateway-issued
   presigned URLs.
-- **Per-live-session STS scoping.** When a live session opens, the
-  gateway calls MinIO STS `AssumeRole` with an inline policy that
-  permits only `s3:PutObject` / `s3:DeleteObject` /
-  `s3:AbortMultipartUpload` against `live-out/<api_key>/<live_id>/*`.
-  The runner gets those temp creds (access key + secret + session
-  token + ExpiresAt). MinIO enforces the scope server-side, so a
-  compromised runner can only write within its own session's prefix.
-  The gateway's long-lived bucket credentials never leave the gateway
-  process.
 - Bucket `lvp-video-ingest` is **anonymous-read** in dev (so the
   runner can pull VOD inputs and viewers can fetch HLS). In production,
   restrict to runner IPs or use signed download URLs at job-dispatch
@@ -90,8 +81,22 @@ rate_limit_exceeded` with `Retry-After`. Reservation NOT opened.
 - Presigned URLs default to `S3_PRESIGN_TTL_SECONDS=3600`. Shorter
   values are safer; longer values aid resumable uploads.
 - Object keys include a UUID prefix (`abr/<api_key_id>/<uuid>/...`,
-  `live-out/<api_key_id>/<live_id>/...`) to prevent guessing and
+  unique ABR artifact prefixes) to prevent guessing and
   enable per-user GC.
+
+## Paid protocol credentials
+
+`LOC_CALLER_PRIVATE_KEY` is a persistent secp256k1 identity used to sign
+caller proofs bound to the authorization and workload. LOC owns network
+funding; this key is not a funded operator wallet. `OPERATION_SECRETS_KEY`
+is a persistent 32-byte AES-GCM key protecting stored recovery credentials.
+Keep both outside Git and retain them with database backups. Drain active
+operations before rotating them.
+
+Broker session credentials, stream grants and authorizations must not appear
+in public status responses or logs. Signed terminal evidence is required for
+settlement; transport success, a callback, or elapsed wall-clock time does
+not substitute for that evidence.
 
 ## Threats
 
@@ -124,7 +129,8 @@ rate_limit_exceeded` with `Retry-After`. Reservation NOT opened.
 
 - `METRICS_TOKEN`
 - `RESEND_API_KEY`
-- `LIVEPEER_RESOLVER_SOCKET`, `LIVEPEER_PAYER_DAEMON_SOCKET`
+- `LOC_API_KEY` (required for paid work), `LOC_CALLER_PRIVATE_KEY`,
+  `OPERATION_SECRETS_KEY` (both required whenever LOC is configured)
 - `ALLOWED_ORIGINS`
 
 All secrets injected via env. No secrets in code, migrations, or docs.

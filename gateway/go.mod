@@ -9,6 +9,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sts v1.42.1
 	github.com/caarlos0/env/v11 v11.2.2
 	github.com/danielgtaylor/huma/v2 v2.27.0
+	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.0
 	github.com/go-chi/chi/v5 v5.1.0
 	github.com/golang-migrate/migrate/v4 v4.18.1
 	github.com/google/uuid v1.6.0
@@ -16,6 +17,7 @@ require (
 	github.com/prometheus/client_golang v1.20.5
 	github.com/resend/resend-go/v2 v2.13.0
 	github.com/yutopp/go-rtmp v0.0.7
+	golang.org/x/crypto v0.48.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
@@ -50,7 +52,6 @@ require (
 	go.opentelemetry.io/otel/metric v1.43.0 // indirect
 	go.opentelemetry.io/otel/trace v1.43.0 // indirect
 	go.uber.org/atomic v1.7.0 // indirect
-	golang.org/x/crypto v0.48.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.42.0 // indirect
 	golang.org/x/text v0.34.0 // indirect

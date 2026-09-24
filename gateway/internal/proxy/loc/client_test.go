@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -27,7 +28,7 @@ func TestWeiUnmarshal(t *testing.T) {
 		want string
 	}{
 		{`123`, "123"},
-		{`"456"`, "456"},                                         // catalog prices are quoted decimals
+		{`"456"`, "456"}, // catalog prices are quoted decimals
 		{`123456789012345678901234567890`, "123456789012345678901234567890"}, // > int64
 		{`null`, "0"},
 	}
@@ -58,18 +59,18 @@ func TestCreateJobDecodesBigWei(t *testing.T) {
 			t.Error("missing SDK identity header")
 		}
 		loctest.WriteJSON(w, 201, map[string]any{
-			"job_id":             uuid.NewString(),
-			"work_id":            "abcd1234",
-			"broker_url":         "http://broker.example",
-			"mode":               "http-reqresp@v0",
-			"payment_envelope":   "ZmFrZQ==", // "fake"
-			"expected_value_wei": json.Number("2000000000000000000"),  // 2 ETH, > int32
-			"funded_value_wei":   json.Number("123456789012345678901"), // > int64
-			"settle_endpoint":    "/v1/jobs/x/settle",
-			"opened_at":          "2026-01-01T00:00:00Z",
+			"job_id":     uuid.NewString(),
+			"work_id":    "abcd1234",
+			"broker_url": "http://broker.example",
+			"protocol":   "paid-job/v1", "transport": "stream", "request_id": "loc-generated", "accounting_mode": "wholesale_account", "work_unit": "units",
+			"spend_authorization": "ZmFrZQ==",                           // "fake"
+			"expected_value_wei":  json.Number("2000000000000000000"),   // 2 ETH, > int32
+			"funded_value_wei":    json.Number("123456789012345678901"), // > int64
+			"settle_endpoint":     "/v1/jobs/x/settle",
+			"opened_at":           "2026-01-01T00:00:00Z",
 		})
 	}
-	resp, err := testClient(t, fake.URL()).CreateJob(context.Background(), CreateJobRequest{
+	resp, err := testClient(t, fake.URL()).CreateJobV2(context.Background(), CreateJobRequestV2{RequestID: "stable", Transport: "stream",
 		Capability: "video:transcode.abr", Offering: "default", EstimatedUnits: 600,
 	})
 	if err != nil {
@@ -78,10 +79,10 @@ func TestCreateJobDecodesBigWei(t *testing.T) {
 	if got := resp.FundedValueWei.String(); got != "123456789012345678901" {
 		t.Errorf("funded wei: got %s", got)
 	}
-	pb, err := resp.PaymentBytes()
-	if err != nil || string(pb) != "fake" {
-		t.Errorf("payment bytes: %q err=%v", pb, err)
+	if resp.SpendAuthorization != "ZmFrZQ==" {
+		t.Error("spend authorization missing")
 	}
+
 }
 
 func TestErrorEnvelopeAndMatchers(t *testing.T) {
@@ -91,7 +92,7 @@ func TestErrorEnvelopeAndMatchers(t *testing.T) {
 		loctest.WriteError(w, 402, "INSUFFICIENT_CREDIT", "balance too low")
 	}
 	c := testClient(t, fake.URL())
-	_, err := c.CreateJob(context.Background(), CreateJobRequest{Capability: "x", Offering: "y", EstimatedUnits: 1})
+	_, err := c.CreateJobV2(context.Background(), CreateJobRequestV2{RequestID: "stable", Transport: "stream", Capability: "x", Offering: "y", EstimatedUnits: 1})
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -106,7 +107,7 @@ func TestErrorEnvelopeAndMatchers(t *testing.T) {
 	fake.CreateJob = func(w http.ResponseWriter, r *http.Request) {
 		loctest.WriteError(w, 402, "cap_reached", "session cap reached")
 	}
-	_, err = c.CreateJob(context.Background(), CreateJobRequest{Capability: "x", Offering: "y", EstimatedUnits: 1})
+	_, err = c.CreateJobV2(context.Background(), CreateJobRequestV2{RequestID: "stable", Transport: "stream", Capability: "x", Offering: "y", EstimatedUnits: 1})
 	if !IsInsufficientCredit(err) {
 		t.Errorf("cap_reached should match IsInsufficientCredit: %v", err)
 	}
@@ -114,7 +115,7 @@ func TestErrorEnvelopeAndMatchers(t *testing.T) {
 	fake.CreateJob = func(w http.ResponseWriter, r *http.Request) {
 		loctest.WriteError(w, 404, "NO_ROUTE_AVAILABLE", "nobody advertises this")
 	}
-	_, err = c.CreateJob(context.Background(), CreateJobRequest{Capability: "x", Offering: "y", EstimatedUnits: 1})
+	_, err = c.CreateJobV2(context.Background(), CreateJobRequestV2{RequestID: "stable", Transport: "stream", Capability: "x", Offering: "y", EstimatedUnits: 1})
 	if !IsNoRoute(err) {
 		t.Errorf("IsNoRoute=false for %v", err)
 	}
@@ -124,7 +125,7 @@ func TestErrorEnvelopeAndMatchers(t *testing.T) {
 		w.WriteHeader(500)
 		_, _ = w.Write([]byte("upstream blew up"))
 	}
-	_, err = c.CreateJob(context.Background(), CreateJobRequest{Capability: "x", Offering: "y", EstimatedUnits: 1})
+	_, err = c.CreateJobV2(context.Background(), CreateJobRequestV2{RequestID: "stable", Transport: "stream", Capability: "x", Offering: "y", EstimatedUnits: 1})
 	ae, ok := err.(*APIError)
 	if !ok || ae.Message != "upstream blew up" || ae.StatusCode != 500 {
 		t.Errorf("raw-body fallback: %#v", err)
@@ -150,8 +151,8 @@ func TestSettleRetriesThenSucceeds(t *testing.T) {
 			"cap_status": map[string]any{"session_pct_used": 0.5, "will_refuse_next_refill": false},
 		})
 	}
-	resp, err := testClient(t, fake.URL()).SettleJob(context.Background(), uuid.New(),
-		SettleJobRequest{ActualUnits: 600})
+	resp, err := testClient(t, fake.URL()).SettleJobV2(context.Background(), uuid.New(),
+		SettleJobRequestV2{BrokerJobID: "broker-job", WorkUnit: "units", Settlement: map[string]any{"payload": map[string]any{}, "signature": map[string]any{}}, ActualUnits: 600})
 	if err != nil {
 		t.Fatalf("SettleJob: %v", err)
 	}
@@ -168,10 +169,10 @@ func TestDoubleSettleIsAlreadySettled(t *testing.T) {
 	defer fake.CloseServer()
 	c := testClient(t, fake.URL())
 	jobID := uuid.New()
-	if _, err := c.SettleJob(context.Background(), jobID, SettleJobRequest{ActualUnits: 10}); err != nil {
+	if _, err := c.SettleJobV2(context.Background(), jobID, SettleJobRequestV2{BrokerJobID: "broker-job", WorkUnit: "units", Settlement: map[string]any{"payload": map[string]any{}, "signature": map[string]any{}}, ActualUnits: 10}); err != nil {
 		t.Fatalf("first settle: %v", err)
 	}
-	_, err := c.SettleJob(context.Background(), jobID, SettleJobRequest{ActualUnits: 10})
+	_, err := c.SettleJobV2(context.Background(), jobID, SettleJobRequestV2{BrokerJobID: "broker-job", WorkUnit: "units", Settlement: map[string]any{"payload": map[string]any{}, "signature": map[string]any{}}, ActualUnits: 10})
 	if !IsAlreadySettled(err) {
 		t.Errorf("second settle should be IsAlreadySettled, got %v", err)
 	}
@@ -183,8 +184,8 @@ func TestRateLimitedCarriesRetryAfter(t *testing.T) {
 	fake.CreateJob = func(w http.ResponseWriter, r *http.Request) {
 		loctest.WriteRateLimited(w, 7)
 	}
-	_, err := testClient(t, fake.URL()).CreateJob(context.Background(),
-		CreateJobRequest{Capability: "x", Offering: "y", EstimatedUnits: 1})
+	_, err := testClient(t, fake.URL()).CreateJobV2(context.Background(),
+		CreateJobRequestV2{RequestID: "stable", Transport: "stream", Capability: "x", Offering: "y", EstimatedUnits: 1})
 	ae, ok := err.(*APIError)
 	if !ok || ae.StatusCode != 429 || ae.RetryAfter != 7*time.Second {
 		t.Errorf("rate-limit parse: %#v", err)
@@ -198,5 +199,20 @@ func TestRateLimitedCarriesRetryAfter(t *testing.T) {
 func TestNilClientForMissingConfig(t *testing.T) {
 	if NewClient("", "pymth_x", "", 0) != nil || NewClient("http://x", "", "", 0) != nil {
 		t.Error("missing base URL or API key should yield nil client")
+	}
+}
+
+func TestLOCDoesNotFollowRedirects(t *testing.T) {
+	called := false
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { called = true; w.WriteHeader(200) }))
+	defer target.Close()
+	redirect := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL, http.StatusTemporaryRedirect)
+	}))
+	defer redirect.Close()
+	client := NewClient(redirect.URL, "private-api-key", "test/v2/local", time.Second)
+	err := client.doJSON(context.Background(), http.MethodGet, "/v1/jobs", nil, nil)
+	if err == nil || called {
+		t.Fatalf("redirect must fail without forwarding LOC credentials: %v %v", err, called)
 	}
 }

@@ -3,9 +3,11 @@ package rtmp
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/url"
 	"strings"
 	"sync"
@@ -53,11 +55,23 @@ func DialAndPublish(ctx context.Context, upstreamURL string, log logger) (*Relay
 		return nil, err
 	}
 
-	dialCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	_ = dialCtx // yutopp/go-rtmp's Dial doesn't take a ctx; we rely on default Dial timeout
-
-	conn, err := rtmp.Dial("rtmp", host, &rtmp.ConnConfig{})
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	scheme := "rtmp"
+	if strings.HasPrefix(upstreamURL, "rtmps://") {
+		scheme = "rtmps"
+	}
+	dialer := &net.Dialer{Timeout: 10 * time.Second}
+	if deadline, ok := ctx.Deadline(); ok {
+		dialer.Deadline = deadline
+	}
+	var conn *rtmp.ClientConn
+	if scheme == "rtmps" {
+		conn, err = rtmp.DialWithTLSDialer(&tls.Dialer{NetDialer: dialer, Config: &tls.Config{MinVersion: tls.VersionTLS12}}, scheme, host, &rtmp.ConnConfig{})
+	} else {
+		conn, err = rtmp.DialWithDialer(dialer, scheme, host, &rtmp.ConnConfig{})
+	}
 	if err != nil {
 		return nil, fmt.Errorf("rtmp dial %s: %w", host, err)
 	}
@@ -68,7 +82,7 @@ func DialAndPublish(ctx context.Context, upstreamURL string, log logger) (*Relay
 			App:      app,
 			Type:     "nonprivate",
 			FlashVer: "FMLE/3.0 (compatible; gateway-relay)",
-			TCURL:    fmt.Sprintf("rtmp://%s/%s", host, app),
+			TCURL:    fmt.Sprintf("%s://%s/%s", scheme, host, app),
 		},
 	}); err != nil {
 		_ = conn.Close()
@@ -87,11 +101,11 @@ func DialAndPublish(ctx context.Context, upstreamURL string, log logger) (*Relay
 		PublishingType: "live",
 	}); err != nil {
 		_ = conn.Close()
-		return nil, fmt.Errorf("rtmp publish (key=...%s): %w", lastN(streamKey, 4), err)
+		return nil, errors.New("rtmp upstream publish rejected")
 	}
 
 	log.Info("rtmp relay: upstream publish opened",
-		"upstream_host", host, "app", app, "stream_key_hint", lastN(streamKey, 4))
+		"upstream_host", host)
 
 	return &Relay{
 		upstreamURL: upstreamURL,
@@ -155,29 +169,27 @@ func (r *Relay) Close() error {
 // needs `app` and `streamKey` separately. We don't use net/url alone
 // because RTMP URLs have a specific app/key path convention.
 func parseRTMPURL(raw string) (host, app, streamKey string, err error) {
-	if !strings.HasPrefix(raw, "rtmp://") && !strings.HasPrefix(raw, "rtmps://") {
-		return "", "", "", fmt.Errorf("rtmp url must start with rtmp:// or rtmps://, got %q", raw)
-	}
 	u, perr := url.Parse(raw)
-	if perr != nil {
-		return "", "", "", fmt.Errorf("parse %s: %w", raw, perr)
+	if perr != nil || (u.Scheme != "rtmp" && u.Scheme != "rtmps") || u.Hostname() == "" || u.User != nil || u.Fragment != "" {
+		return "", "", "", errors.New("invalid upstream RTMP URL")
 	}
-	host = u.Host
-	if host == "" {
-		return "", "", "", fmt.Errorf("rtmp url missing host: %q", raw)
+	port := u.Port()
+	if port == "" {
+		port = "1935"
+		if u.Scheme == "rtmps" {
+			port = "443"
+		}
 	}
-	// Path like `/live/lvk_xyz` — split on the first segment for `app`,
-	// rest is the stream key.
+	host = net.JoinHostPort(u.Hostname(), port)
 	path := strings.TrimPrefix(u.Path, "/")
-	if path == "" {
-		return "", "", "", fmt.Errorf("rtmp url missing path: %q", raw)
+	app, streamKey, ok := strings.Cut(path, "/")
+	if !ok || app == "" || streamKey == "" {
+		return "", "", "", errors.New("upstream RTMP URL requires app and stream key")
 	}
-	if i := strings.Index(path, "/"); i > 0 {
-		app = path[:i]
-		streamKey = path[i+1:]
-	} else {
-		app = path
-		streamKey = ""
+	// v2 runner keys contain a signed query token. It belongs to the
+	// publish name, not the connection URL, and must survive relaying.
+	if u.RawQuery != "" {
+		streamKey += "?" + u.RawQuery
 	}
 	return host, app, streamKey, nil
 }

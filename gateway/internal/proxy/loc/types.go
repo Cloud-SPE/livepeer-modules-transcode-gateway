@@ -1,7 +1,7 @@
 package loc
 
 import (
-	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"math/big"
 	"strings"
@@ -44,39 +44,6 @@ func (w *Wei) BigInt() *big.Int {
 	return &w.Int
 }
 
-// ── jobs (one-shot, post-settled) ────────────────────────────────────
-
-type CreateJobRequest struct {
-	Capability     string `json:"capability"`
-	Offering       string `json:"offering"`
-	EstimatedUnits int64  `json:"estimated_units"`
-	MaxTotalUnits  *int64 `json:"max_total_units,omitempty"`
-}
-
-type CreateJobResponse struct {
-	JobID            uuid.UUID `json:"job_id"`
-	WorkID           string    `json:"work_id"` // hex recipient_rand_hash
-	BrokerURL        string    `json:"broker_url"`
-	Mode             string    `json:"mode"`
-	PaymentEnvelope  string    `json:"payment_envelope"` // base64 Payment bytes
-	ExpectedValueWei *Wei      `json:"expected_value_wei"`
-	FundedValueWei   *Wei      `json:"funded_value_wei"`
-	SettleEndpoint   string    `json:"settle_endpoint"`
-	OpenedAt         time.Time `json:"opened_at"`
-}
-
-// PaymentBytes decodes the base64 envelope into the raw Payment bytes
-// the broker expects in the Livepeer-Payment header.
-func (r *CreateJobResponse) PaymentBytes() ([]byte, error) {
-	return base64.StdEncoding.DecodeString(r.PaymentEnvelope)
-}
-
-type SettleJobRequest struct {
-	ActualUnits int64          `json:"actual_units"`
-	Outcome     string         `json:"outcome,omitempty"`
-	Settlement  map[string]any `json:"settlement,omitempty"`
-}
-
 type SettleJobResponse struct {
 	JobID          uuid.UUID `json:"job_id"`
 	WorkID         string    `json:"work_id"`
@@ -86,57 +53,6 @@ type SettleJobResponse struct {
 	Outcome        string    `json:"outcome"`
 	ClosedAt       time.Time `json:"closed_at"`
 	CapStatus      CapStatus `json:"cap_status"`
-}
-
-// ── sessions (long-running, refillable) ──────────────────────────────
-
-type CreateSessionRequest struct {
-	Capability           string `json:"capability"`
-	Offering             string `json:"offering"`
-	EstimatedRunwayUnits int64  `json:"estimated_runway_units"`
-	MaxTotalUnits        int64  `json:"max_total_units"`
-}
-
-type CreateSessionResponse struct {
-	SessionID        uuid.UUID `json:"session_id"`
-	WorkID           string    `json:"work_id"`
-	BrokerURL        string    `json:"broker_url"`
-	Mode             string    `json:"mode"`
-	PaymentEnvelope  string    `json:"payment_envelope"`
-	ExpectedValueWei *Wei      `json:"expected_value_wei"`
-	FundedValueWei   *Wei      `json:"funded_value_wei"`
-	RefillEndpoint   string    `json:"refill_endpoint"`
-	CloseEndpoint    string    `json:"close_endpoint"`
-	OpenedAt         time.Time `json:"opened_at"`
-}
-
-func (r *CreateSessionResponse) PaymentBytes() ([]byte, error) {
-	return base64.StdEncoding.DecodeString(r.PaymentEnvelope)
-}
-
-type RefillSessionRequest struct {
-	// ObservedConsumedUnits is advisory (logged by LOC for triage); the
-	// payment daemon's ledger remains authoritative for sizing.
-	ObservedConsumedUnits *int64 `json:"observed_consumed_units,omitempty"`
-}
-
-type RefillSessionResponse struct {
-	WorkID           string    `json:"work_id"` // same as the session's
-	RefillSeq        int       `json:"refill_seq"`
-	PaymentEnvelope  string    `json:"payment_envelope"`
-	ExpectedValueWei *Wei      `json:"expected_value_wei"`
-	FundedValueWei   *Wei      `json:"funded_value_wei"`
-	CapStatus        CapStatus `json:"cap_status"`
-}
-
-func (r *RefillSessionResponse) PaymentBytes() ([]byte, error) {
-	return base64.StdEncoding.DecodeString(r.PaymentEnvelope)
-}
-
-type CloseSessionRequest struct {
-	ActualUnits int64          `json:"actual_units"`
-	Outcome     string         `json:"outcome,omitempty"`
-	Settlement  map[string]any `json:"settlement,omitempty"`
 }
 
 type CloseSessionResponse struct {
@@ -154,7 +70,7 @@ type SessionStatusResponse struct {
 	WorkID         string     `json:"work_id"`
 	Capability     string     `json:"capability"`
 	Offering       string     `json:"offering"`
-	Mode           string     `json:"mode"`
+	Protocol       string     `json:"protocol"`
 	State          string     `json:"state"`
 	EstimatedUnits int64      `json:"estimated_units"`
 	MaxTotalUnits  int64      `json:"max_total_units"`
@@ -184,15 +100,22 @@ type CapStatus struct {
 // ── discovery (read-only catalog) ─────────────────────────────────────
 
 type Capability struct {
-	Name      string     `json:"name"`
-	WorkUnit  string     `json:"work_unit"`
-	Offerings []Offering `json:"offerings"`
+	Name              string          `json:"name"`
+	WorkUnit          string          `json:"work_unit"`
+	Offerings         []Offering      `json:"offerings"`
+	WorkUnitEstimator json.RawMessage `json:"work_unit_estimator"`
 }
 
 type Offering struct {
-	ID                  string `json:"id"`
-	PricePerWorkUnitWei *Wei   `json:"price_per_work_unit_wei"` // decimal string on the wire
-	WorkUnit            string `json:"work_unit"`
+	ID                  string          `json:"id"`
+	Protocol            string          `json:"protocol"`
+	UnitsPerPrice       *Wei            `json:"units_per_price"`
+	WorkUnitEstimator   json.RawMessage `json:"work_unit_estimator"`
+	Job                 json.RawMessage `json:"job"`
+	Session             json.RawMessage `json:"session"`
+	Extra               json.RawMessage `json:"extra"`
+	PricePerWorkUnitWei *Wei            `json:"price_per_work_unit_wei"` // decimal string on the wire
+	WorkUnit            string          `json:"work_unit"`
 }
 
 type Orchestrator struct {

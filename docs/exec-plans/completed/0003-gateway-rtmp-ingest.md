@@ -1,3 +1,6 @@
+> Historical pre-v2 design archive, migrated to Beads on 2026-09-24.
+> This document is rationale only; current work is tracked in Beads.
+
 ---
 plan: 0003
 title: Gateway-owned RTMP ingest for live (live-session-gateway-ingest@v0)

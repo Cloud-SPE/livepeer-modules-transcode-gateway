@@ -1,38 +1,46 @@
-# PLANS
+# Work tracking
 
-Plans are first-class artifacts. Non-trivial work lands as an execution
-plan under `docs/exec-plans/active/`; completed plans move to
-`docs/exec-plans/completed/`. Lightweight changes go straight to PR.
+Beads is the sole tracker for every change, including small fixes, debt,
+acceptance, dependencies, and cross-session handoffs. Read the checked-in
+[Beads skill](.agents/skills/beads/SKILL.md), copied with its references and
+license from `~/git-repos/personal_brand/beads-skill`.
 
-## Active
+Start or recover a session with `bd prime`, `bd ready`, and
+`bd list --status in_progress --json`. Read the selected issue, claim it with
+`bd update <id> --claim`, and record findings with `bd note`. Create described
+beads before edits. Large work uses an epic with children and real blocking
+edges (`bd dep add <dependent> <blocker>`). Close completed work with a reason
+that records validation. `bd blocked` shows what cannot progress.
 
-| Plan | Status |
-|---|---|
+The gateway uses the `vgw` prefix. The runners repository has its own Beads
+workspace; run commands from the repository whose work is being tracked.
+The Modules v2 migration is epic `vgw-av1`. Existing debt was migrated as
+individual beads labeled `legacy-debt`; live status must be read from Beads.
+The old execution-plan documents are immutable historical rationale, not an
+active work queue. New design decisions belong in `docs/design-docs/` and
+reference their bead IDs, without duplicating task status or checklists.
 
-(none.)
+## Installation and persistence
 
-## Completed
+The local database is initialized under `.beads/`. The project-scoped custom
+skill is in `.agents/skills/beads/`; `.codex/config.toml` and
+`.codex/hooks.json` load Beads at session start and restore context after
+compaction. Restart an already running Codex session to load newly installed
+hooks. On a new machine, install the `bd` version recorded by the skill and
+run `bd prime` and `bd where`. The installed embedded-mode build reports
+`bd doctor` as unsupported; `bd prime`, `bd list --json` and the database
+location establish local usability. `bd setup codex --check` compares against
+the CLI-bundled skill and reports this intentionally customized skill as
+stale; do not overwrite the requested skill merely to clear that warning.
 
-| Plan | Date | Summary |
-|---|---|---|
-| [`0001-scaffold`](./docs/exec-plans/completed/0001-scaffold.md) | 2026-05-19 | Initial scaffold: Go gateway shell, three zero-build Lit SPAs, RustFS S3 ingest, docker-compose with payment + registry daemons, harness docs. Defines `/v1/abr`, `/v1/live`, `/v1/capabilities` surface and the `live_streams` table on top of the SaaS shell ported from `livepeer-modules-openai`. |
-| Route rename + MinIO/STS + SPA embed | 2026-05-21 | Three converging batches landed together: (1) all HTTP routes moved under `/api/*` (`/v1/*`→`/api/v1/*`, `/admin/*`→`/api/admin/*`, `/portal/*`→`/api/portal/*`, `/api/waitlist`→`/api/public/waitlist`, `/api/verify`→`/api/public/verify`, `/api/abr/callback`→`/api/webhooks/abr`); `/health` and `/metrics` stay at root. (2) Storage backend swapped from RustFS to MinIO; live sessions now use MinIO STS `AssumeRole` to mint per-session credentials scoped to `live-out/<api>/<sess>/*` (env vars renamed `RUSTFS_*`→`MINIO_*`, compose services `rustfs`/`rustfs-bootstrap`/`rustfs-cors` replaced by `minio` + `minio-bootstrap` with CORS via `MINIO_API_CORS_ALLOW_ORIGIN`). (3) The three SPAs are now embedded into the gateway binary via `//go:embed`; production serves everything on one port; `make web` dev mode still works for hot reload. Plus: `live-session-remote-runner@v0` removed (only `live-session-gateway-ingest@v0` survives), `DELETE /api/v1/live` synchronously tears down the RTMP relay (~2s OBS disconnect), admin live-streams view shows runner status (migration 0008 `runner_status_json`), portal playground surfaces raw runner errors + adds Copy URL / variants UI, and `tztcloud/livepeer-video-gateway:v1.3.0` published to Docker Hub. |
+Git contains the instructions, configuration, and design rationale. Issue
+state lives in Dolt, not `.beads/issues.jsonl`. Use `bd dolt pull` / `bd dolt push`
+for cross-machine issue synchronization when authorized; the configured
+remote still needs a successful first push before another clone can recover
+this local migration. Do not treat an optional export or a Git commit as
+issue synchronization. Never invoke raw Dolt against the live workspace.
 
-## How to write a plan
-
-Each plan is a markdown file at `docs/exec-plans/active/NNNN-slug.md` with:
-
-1. **One-liner.** What is this plan about? Answerable in one sentence.
-2. **Context.** Why does this exist? What's the trigger?
-3. **Scope.** What's in. What's out.
-4. **Approach.** Phases, files touched, decisions to lock.
-5. **Acceptance.** How do we know this is done?
-6. **Decision log.** Each non-obvious choice + why, dated.
-
-When the plan completes, append a `## Outcome` section, then `git mv` it
-into `docs/exec-plans/completed/`.
-
-## Tech debt
-
-Ongoing debt tracked in
-[`docs/exec-plans/tech-debt-tracker.md`](./docs/exec-plans/tech-debt-tracker.md).
+The session close contract is printed by `bd prime`. Record validation and
+remaining blockers in Beads, inspect `git status`, and report the handoff.
+Commits, Git pushes, and Dolt pushes require the authority provided by the
+active session; none are implied by completing a bead.

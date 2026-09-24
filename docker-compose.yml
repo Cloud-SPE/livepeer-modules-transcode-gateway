@@ -2,7 +2,7 @@
 #
 # Default `docker compose up` brings up:
 #   - db                 (postgres:16-alpine)
-#   - minio              (S3-compatible object store for VOD + live HLS,
+#   - minio              (S3-compatible object store for VOD + ABR artifacts,
 #                          CORS via MINIO_API_CORS_ALLOW_ORIGIN env)
 #   - minio-bootstrap    (one-shot: waits for minio, creates bucket + access key)
 #   - gateway            (build from ./gateway/Dockerfile; serves API,
@@ -10,8 +10,8 @@
 #                          /metrics on one port, plus RTMP on :1935)
 #
 # Payments + route selection are handled by LOC (the Livepeer Open
-# Clearinghouse) over HTTPS — set LOC_API_KEY in .env. No local Livepeer
-# daemons or keystore are required; `/api/v1/*` returns 503 until
+# Clearinghouse) over HTTPS — set LOC_API_KEY and both persistent keys in .env. No local Livepeer
+# payer daemons or funded wallet are required; `/api/v1/*` returns 503 until
 # LOC_API_KEY is set.
 #
 # Capability workers (abr-runner, transcode-runner, capability-broker)
@@ -82,15 +82,10 @@ services:
       - |
         set -e
         mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD"
-        # Bucket + anonymous read for HLS playback.
+        # Bucket + public ABR artifact playback.
         mc mb --ignore-existing local/$$S3_BUCKET
         mc anonymous set download local/$$S3_BUCKET || true
-        # Gateway IAM user — used for static-credential operations (VOD
-        # ABR uploads) AND for calling STS AssumeRole (per-session live
-        # uploads). The 'readwrite' built-in policy gives s3:* on /*,
-        # which covers both. MinIO allows STS AssumeRole for any
-        # authenticated user; the inline policy passed at AssumeRole
-        # time narrows the result to a session's prefix.
+        # Static credentials for VOD ingest and ABR artifacts.
         if ! mc admin user info local "$$S3_ACCESS_KEY_ID" >/dev/null 2>&1; then
           mc admin user add local "$$S3_ACCESS_KEY_ID" "$$S3_SECRET_ACCESS_KEY"
         fi
@@ -153,44 +148,38 @@ services:
       # ── LOC (Livepeer Open Clearinghouse) — payments + routing ──
       LOC_BASE_URL: ${LOC_BASE_URL:-https://loc.cloudspe.com}
       LOC_API_KEY: ${LOC_API_KEY:-}
-      SETTLE_JANITOR_INTERVAL_SECS: ${SETTLE_JANITOR_INTERVAL_SECS:-60}
+      LOC_CALLER_PRIVATE_KEY: ${LOC_CALLER_PRIVATE_KEY:-}
+      OPERATION_SECRETS_KEY: ${OPERATION_SECRETS_KEY:-}
       REGISTRY_REFRESH_INTERVAL_MS: ${REGISTRY_REFRESH_INTERVAL_MS:-60000}
       ABR_CAPABILITY: ${ABR_CAPABILITY:-video:transcode.abr}
+      ABR_OFFERING: ${ABR_OFFERING:-abr-default}
+      ABR_MAX_TOTAL_UNITS: ${ABR_MAX_TOTAL_UNITS:-1000000}
+      ABR_JOB_TIMEOUT_SECS: ${ABR_JOB_TIMEOUT_SECS:-3600}
       LIVE_CAPABILITY: ${LIVE_CAPABILITY:-video:transcode.live}
-      # Offering label orchs advertise for the live-session-gateway-ingest@v0
-      # mode under capability video:transcode.live.
       LIVE_GATEWAY_INGEST_OFFERING: ${LIVE_GATEWAY_INGEST_OFFERING:-gateway-ingest}
 
-      # ── live-session-remote-runner@v0 tuning ──
-      # Defaults match the runner team's approved values; override via
-      # .env for per-deployment policy. Set LIVE_RECONCILE_INTERVAL_SECS=0
-      # to disable the background reconciler (on-GET reconciliation in
-      # handlers_v1.go still applies in that mode).
-      LIVE_IDLE_TIMEOUT_SECS: ${LIVE_IDLE_TIMEOUT_SECS:-120}
+      # paid-session/v1 metering uses whole output_seconds.
       LIVE_RECONCILE_INTERVAL_SECS: ${LIVE_RECONCILE_INTERVAL_SECS:-30}
       LIVE_TOPUP_RUNWAY_THRESHOLD_SECS: ${LIVE_TOPUP_RUNWAY_THRESHOLD_SECS:-60}
       LIVE_TOPUP_FUND_SECS: ${LIVE_TOPUP_FUND_SECS:-60}
-      # LOC session lifetime spend ceiling (~1000 units/sec of output).
-      LIVE_MAX_TOTAL_UNITS: ${LIVE_MAX_TOTAL_UNITS:-6000000}
+      # Lifetime authorization ceiling in whole output_seconds.
+      LIVE_MAX_TOTAL_UNITS: ${LIVE_MAX_TOTAL_UNITS:-6000}
 
-      # ── live-session-gateway-ingest@v0 (plan 0003) ──
-      # Gateway-owned RTMP ingest. Set LIVE_RTMP_PORT to a non-zero
-      # value to enable the listener (and publish the port below).
-      LIVE_RTMP_PORT: ${LIVE_RTMP_PORT:-0}
-      LIVE_PLAYBACK_BASE_URL: ${LIVE_PLAYBACK_BASE_URL:-}
-      LIVE_S3_CREDENTIAL_TTL_HOURS: ${LIVE_S3_CREDENTIAL_TTL_HOURS:-4}
+      LIVE_OUTPUT_PROFILE: ${LIVE_OUTPUT_PROFILE:-live-standard}
+      LIVE_METERING_RENDITION: ${LIVE_METERING_RENDITION:-720p}
+      # Public RTMP listener and externally reachable server root.
+      LIVE_RTMP_PORT: ${LIVE_RTMP_PORT:-1935}
+      LIVE_EXTERNAL_RTMP_URL: ${LIVE_EXTERNAL_RTMP_URL:-rtmp://localhost:1935/live}
 
       # ── /api/v1/* rate limit ──
       V1_RATE_LIMIT_PER_MINUTE: ${V1_RATE_LIMIT_PER_MINUTE:-60}
       V1_RATE_LIMIT_BURST: ${V1_RATE_LIMIT_BURST:-30}
     ports:
       - "${GATEWAY_HOST_PORT:-4000}:4000"
-      # RTMP ingest port for live-session-gateway-ingest@v0 (plan 0003).
-      # Published only when LIVE_RTMP_PORT is non-zero. Docker requires a
-      # static port mapping at compose-parse time; this maps host:1935 ↔
-      # container:1935 by default. If you want a different host port,
-      # override LIVE_RTMP_HOST_PORT.
-      - "${LIVE_RTMP_HOST_PORT:-1935}:${LIVE_RTMP_PORT:-1935}"
+      # Listener disabled with LIVE_RTMP_PORT=0 still leaves this mapping;
+      # remove this line for a deployment that must publish no RTMP port.
+      # Changing the internal listener port also requires changing :1935 here.
+      - "${LIVE_RTMP_HOST_PORT:-1935}:1935"
     restart: unless-stopped
 
 

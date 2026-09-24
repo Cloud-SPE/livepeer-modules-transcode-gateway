@@ -35,7 +35,7 @@ func New(deps Deps) http.Handler {
 		promhttp.HandlerFor(deps.Metrics.Reg, promhttp.HandlerOpts{}).ServeHTTP(w, req)
 	})
 
-	humaConfig := huma.DefaultConfig("Livepeer Video Gateway", "0.1.0")
+	humaConfig := huma.DefaultConfig("Livepeer Video Gateway", "2.0.0")
 	humaConfig.Info.Description = "VOD ABR + RTMP→HLS live transcode gateway backed by the Livepeer network."
 	api := humachi.New(r, humaConfig)
 
@@ -44,9 +44,7 @@ func New(deps Deps) http.Handler {
 	RegisterPortal(api, deps)
 	RegisterAdmin(api, deps)
 	RegisterV1(api, deps)
-	// Webhook receiver bypasses huma (raw-body HMAC verification needs
-	// untouched bytes, and huma's body parsing would re-marshal).
-	MountCallbacks(r, deps)
+	// v2 runner results arrive through the paid exchange, not unsigned webhooks.
 
 	// Embedded SPAs — site at /, portal at /portal/, admin at /admin/.
 	// Falls back to 404 for /api/* paths chi didn't otherwise match so

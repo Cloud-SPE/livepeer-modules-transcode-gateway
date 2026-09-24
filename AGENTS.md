@@ -32,8 +32,8 @@ before making load-bearing decisions.
 | What invariants must any change uphold? | [`docs/design-docs/core-beliefs.md`](./docs/design-docs/core-beliefs.md) |
 | What design docs exist? | [`docs/design-docs/index.md`](./docs/design-docs/index.md) |
 | What product surface ships? | [`docs/product-specs/index.md`](./docs/product-specs/index.md) |
-| What plans are active / done? | [`PLANS.md`](./PLANS.md) |
-| What tech debt are we tracking? | [`docs/exec-plans/tech-debt-tracker.md`](./docs/exec-plans/tech-debt-tracker.md) |
+| What work is ready / blocked / done? | `bd ready`, `bd blocked`, `bd list --status closed`; workflow in [`PLANS.md`](./PLANS.md) |
+| What tech debt are we tracking? | `bd list --label legacy-debt`; create discovered debt in Beads |
 | What product principles guide tradeoffs? | [`PRODUCT_SENSE.md`](./PRODUCT_SENSE.md) |
 | What's the quality bar per layer? | [`QUALITY_SCORE.md`](./QUALITY_SCORE.md) |
 | What reliability properties hold? | [`RELIABILITY.md`](./RELIABILITY.md) |
@@ -48,7 +48,7 @@ before making load-bearing decisions.
 
 | Path | What it is |
 |---|---|
-| [`gateway/`](./gateway/) | Go backend — single binary: transcode `/api/v1/*` API (`/api/v1/abr`, `/api/v1/live`, …), waitlist + auth + admin SaaS shell, HTTP client to LOC (the Livepeer Open Clearinghouse — payments + route selection), S3 + STS client to MinIO, RTMP ingest listener on `:1935`, and the three SPAs embedded via `//go:embed`. |
+| [`gateway/`](./gateway/) | Go backend — single binary: transcode `/api/v1/*` API (`/api/v1/abr`, `/api/v1/live`, …), waitlist + auth + admin SaaS shell, HTTP client to LOC (the Livepeer Open Clearinghouse — payments + route selection), S3 client to MinIO, RTMP ingest listener on `:1935`, and the three SPAs embedded via `//go:embed`. |
 | [`web/site/`](./web/site/) | Zero-build Lit marketing site + waitlist signup. |
 | [`web/portal/`](./web/portal/) | Zero-build Lit user dashboard (account, API keys, playground with Live + Transcode tabs). |
 | [`web/admin/`](./web/admin/) | Zero-build Lit admin (waitlist queue, users, usage, transcode-capability registry). |
@@ -65,10 +65,10 @@ before making load-bearing decisions.
 - **Zero-build SPAs.** `web/` apps use Lit + `esm.sh` importmaps + a
   per-app `dev-server.js`. No Vite, no bundler. See
   [`FRONTEND.md`](./FRONTEND.md) for DOM/CSS invariants.
-- **Gateway pays the network via LOC.** Every `/api/v1/*` request mints
-  a `Livepeer-Payment` envelope through LOC (jobs API for ABR, sessions
-  API for live); the gateway settles actual units back and a settle
-  janitor releases anything stuck. No local daemons, no keystore.
+- **Gateway funds work through LOC.** LOC mints spend authorizations for
+  `paid-job/v1` and `paid-session/v1`; the gateway signs delegated caller
+  proofs and settles broker-signed evidence. Recovery preserves ambiguous
+  dispatches instead of refunding unknown outcomes. No local payer daemon.
 - **Capabilities come from LOC's catalog.** No hardcoded capability
   list. `/api/v1/capabilities` reflects what LOC's discovery API
   advertises.
@@ -76,17 +76,25 @@ before making load-bearing decisions.
   waitlist → email verify → admin approval → API key by email.
 - **VOD ingest lands in MinIO.** The compose stack stands up MinIO
   (S3-compatible) and a one-shot bootstrap container that creates the
-  bucket + access key; the gateway presigns PUTs for VOD upload. Live
-  sessions get per-session credentials via MinIO STS `AssumeRole`,
-  scoped by inline policy to `live-out/<api>/<sess>/*`.
+  bucket + access key; the gateway presigns PUTs for VOD upload and ABR
+  artifacts. Live uses runner-local storage, runtime-issued ingest keys and
+  the HLS URL advertised in the runner descriptor.
 - **Capability workers (abr-runner, capability-broker) are external.**
   This repo talks to the Livepeer network; it does not carry runner
   implementations.
 - **Single root `Makefile`.** Local dev entrypoints live at the repo root.
 
-## Plan-as-code
+## Work tracking with Beads
 
-Non-trivial work lands as an exec plan under
-[`docs/exec-plans/active/`](./docs/exec-plans/active/). Completed plans
-move to [`docs/exec-plans/completed/`](./docs/exec-plans/completed/).
-Lightweight changes go straight to PR.
+Use the checked-in [Beads skill](.agents/skills/beads/SKILL.md) for all work.
+Run `bd prime` at session start and after compaction, then `bd ready` and
+`bd list --status in_progress --json`. Create a described bead before edits,
+claim it with `bd update <id> --claim`, record findings in notes, and close it
+with the validation result. Use dependencies for actual blockers.
+
+Beads is the sole source of task status, dependencies, debt, and acceptance.
+Do not create Markdown task lists, scratch plans, or parallel trackers.
+Design rationale remains in `docs/design-docs/` and links to bead IDs.
+`docs/exec-plans/completed/` preserves historical context only. See
+[PLANS.md](PLANS.md) for setup, recovery, and sync. Do not commit or push
+without user authorization; Beads remote sync is also a separate action.

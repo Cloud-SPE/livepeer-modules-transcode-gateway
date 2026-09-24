@@ -52,10 +52,10 @@ func newConnHandler(deps Deps, stats *serverStats, server *Server, tcpConn net.C
 func (h *connHandler) OnConnect(_ uint32, cmd *rtmpmsg.NetConnectionConnect) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.logger = h.deps.Log.With(
-		"rtmp_app", cmd.Command.App,
-		"rtmp_tcurl", cmd.Command.TCURL,
-	)
+	if cmd.Command.App != "live" {
+		return errors.New("invalid RTMP application")
+	}
+	h.logger = h.deps.Log
 	h.logger.Debug("rtmp: connect")
 	return nil
 }
@@ -79,7 +79,7 @@ func (h *connHandler) OnPublish(_ *rtmp.StreamContext, _ uint32, cmd *rtmpmsg.Ne
 	h.logger = h.logger.With("stream_key_hint", h.streamKeyHint)
 
 	peppered := crypto.HashWithPepper(rawKey, h.deps.Pepper)
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	result, err := h.deps.Auth.AuthenticateStreamKey(ctx, peppered)

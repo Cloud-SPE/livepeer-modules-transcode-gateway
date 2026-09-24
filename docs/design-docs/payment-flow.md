@@ -1,3 +1,5 @@
+> Historical pre-v2 design. For current behavior see [Modules v2](modules-v2.md) and [deployment](../../DEPLOYMENT.md).
+
 # Payment flow
 
 How `Livepeer-Payment` envelopes get minted for `/api/v1/*` requests.

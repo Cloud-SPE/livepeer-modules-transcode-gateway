@@ -28,12 +28,13 @@ type Deps struct {
 	Caps     *repo.CapabilityRepo
 	Email    *email.Mailer
 	S3       *s3.Client
+	Paid     *PaidEngine
 	// LOC is the clearinghouse client: payments + route selection for
 	// both ABR jobs and live sessions. Nil when LOC_API_KEY is unset.
-	LOC  *loc.Client
-	HTTP *livepeer.HTTPClient
-	CapMap   livepeer.CapabilityMap
-	Metrics  *metrics.Registry
+	LOC     *loc.Client
+	HTTP    *livepeer.HTTPClient
+	CapMap  livepeer.CapabilityMap
+	Metrics *metrics.Registry
 	// RTMPProbe is a cheap readiness check the /health handler calls
 	// for the gateway-side RTMP ingest. Implemented in the rtmp package;
 	// nil when LIVE_RTMP_PORT is unset.

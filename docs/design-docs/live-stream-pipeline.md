@@ -1,3 +1,5 @@
+> Historical pre-v2 design. For current behavior see [Modules v2](modules-v2.md) and [deployment](../../DEPLOYMENT.md).
+
 # Live stream pipeline
 
 The `/api/v1/live` flow end-to-end. Mode is

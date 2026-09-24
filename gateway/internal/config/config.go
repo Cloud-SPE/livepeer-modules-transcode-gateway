@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -9,28 +10,25 @@ import (
 )
 
 type Config struct {
-	Port            int      `env:"PORT" envDefault:"4000"`
-	Host            string   `env:"HOST" envDefault:"0.0.0.0"`
-	BaseURL         string   `env:"BASE_URL" envDefault:"http://localhost:4000"`
-	// GatewayPublicURL is the externally-reachable URL of THIS gateway,
-	// passed to the runner as webhook_url so it can POST status updates
-	// back. When empty, no webhook_url is sent → gateway stays oblivious
-	// to runner outcomes (the previous behavior).
-	GatewayPublicURL string  `env:"GATEWAY_PUBLIC_URL"`
-	PublicSiteURL   string   `env:"PUBLIC_SITE_URL" envDefault:"http://localhost:3000"`
-	PublicPortalURL string   `env:"PUBLIC_PORTAL_URL" envDefault:"http://localhost:3001"`
-	AllowedOrigins  []string `env:"ALLOWED_ORIGINS" envSeparator:"," envDefault:"*"`
-	LogLevel        string   `env:"LOG_LEVEL" envDefault:"info"`
+	Port    int    `env:"PORT" envDefault:"4000"`
+	Host    string `env:"HOST" envDefault:"0.0.0.0"`
+	BaseURL string `env:"BASE_URL" envDefault:"http://localhost:4000"`
+	// GatewayPublicURL is the external HTTP origin; also used to derive RTMP host.
+	GatewayPublicURL string   `env:"GATEWAY_PUBLIC_URL"`
+	PublicSiteURL    string   `env:"PUBLIC_SITE_URL" envDefault:"http://localhost:3000"`
+	PublicPortalURL  string   `env:"PUBLIC_PORTAL_URL" envDefault:"http://localhost:3001"`
+	AllowedOrigins   []string `env:"ALLOWED_ORIGINS" envSeparator:"," envDefault:"*"`
+	LogLevel         string   `env:"LOG_LEVEL" envDefault:"info"`
 
 	DatabaseURL   string `env:"DATABASE_URL,required"`
 	MigrationsDir string `env:"MIGRATIONS_DIR" envDefault:"migrations"`
 
-	AdminToken        string        `env:"ADMIN_TOKEN"`
-	APIKeyHashPepper  string        `env:"API_KEY_HASH_PEPPER"`
-	IPHashPepper      string        `env:"IP_HASH_PEPPER"`
-	MetricsToken      string        `env:"METRICS_TOKEN"`
-	SessionTTLHours   int           `env:"SESSION_TTL_HOURS" envDefault:"24"`
-	SessionTTL        time.Duration // derived
+	AdminToken       string        `env:"ADMIN_TOKEN"`
+	APIKeyHashPepper string        `env:"API_KEY_HASH_PEPPER"`
+	IPHashPepper     string        `env:"IP_HASH_PEPPER"`
+	MetricsToken     string        `env:"METRICS_TOKEN"`
+	SessionTTLHours  int           `env:"SESSION_TTL_HOURS" envDefault:"24"`
+	SessionTTL       time.Duration // derived
 
 	ResendAPIKey string `env:"RESEND_API_KEY"`
 	FromEmail    string `env:"FROM_EMAIL" envDefault:"Livepeer Video Gateway <noreply@example.com>"`
@@ -43,49 +41,32 @@ type Config struct {
 	S3SecretAccessKey string `env:"S3_SECRET_ACCESS_KEY"`
 	S3PresignTTLSecs  int    `env:"S3_PRESIGN_TTL_SECONDS" envDefault:"3600"`
 
-	RefreshMS      int           `env:"REGISTRY_REFRESH_INTERVAL_MS" envDefault:"60000"`
+	RefreshMS       int           `env:"REGISTRY_REFRESH_INTERVAL_MS" envDefault:"60000"`
 	RefreshInterval time.Duration // derived
 
-	// LOC (Livepeer Open Clearinghouse) — mints payment envelopes and
-	// owns route selection for ABR jobs (PR-1; live + catalog follow).
-	// LOCAPIKey is the operator-issued pymth_ key; unset → /v1/abr 503s.
-	LOCBaseURL string `env:"LOC_BASE_URL" envDefault:"https://loc.cloudspe.com"`
-	LOCAPIKey  string `env:"LOC_API_KEY"`
-	// SettleJanitorIntervalSecs drives the background loop that re-drives
-	// LOC settles stuck in 'pending' (releases encumbered credit after
-	// crashes / settle-call failures). 0 disables.
-	SettleJanitorIntervalSecs int `env:"SETTLE_JANITOR_INTERVAL_SECS" envDefault:"60"`
-
-	ABRCapability  string `env:"ABR_CAPABILITY" envDefault:"video:transcode.abr"`
-	// LiveCapability is the on-chain capability id for live transcode.
-	// Orchs advertise it with offering = LiveGatewayIngestOffering for the
-	// live-session-gateway-ingest@v0 mode. See
-	// livepeer-network-protocol/modes/live-session-gateway-ingest.md.
-	LiveCapability string `env:"LIVE_CAPABILITY" envDefault:"video:transcode.live"`
-	// LiveGatewayIngestOffering is the offering label orchestrators
-	// advertise when serving the gateway-ingest mode. Spec default is
-	// "gateway-ingest" — change only if your orchestrator network uses
-	// a different label.
+	// LOC owns scoped authorizations, routing and verified settlement.
+	LOCBaseURL                string `env:"LOC_BASE_URL" envDefault:"https://loc.cloudspe.com"`
+	LOCAPIKey                 string `env:"LOC_API_KEY"`
+	CallerPrivateKey          string `env:"LOC_CALLER_PRIVATE_KEY"`
+	OperationSecretsKey       string `env:"OPERATION_SECRETS_KEY"`
+	ABROffering               string `env:"ABR_OFFERING" envDefault:"abr-default"`
+	ABRMaxTotalUnits          int64  `env:"ABR_MAX_TOTAL_UNITS" envDefault:"1000000"`
+	ABRJobTimeoutSecs         int    `env:"ABR_JOB_TIMEOUT_SECS" envDefault:"3600"`
+	LiveOutputProfile         string `env:"LIVE_OUTPUT_PROFILE" envDefault:"live-standard"`
+	LiveMeteringRendition     string `env:"LIVE_METERING_RENDITION" envDefault:"720p"`
+	LiveExternalRTMPURL       string `env:"LIVE_EXTERNAL_RTMP_URL"`
+	ABRCapability             string `env:"ABR_CAPABILITY" envDefault:"video:transcode.abr"`
+	LiveCapability            string `env:"LIVE_CAPABILITY" envDefault:"video:transcode.live"`
 	LiveGatewayIngestOffering string `env:"LIVE_GATEWAY_INGEST_OFFERING" envDefault:"gateway-ingest"`
 
-	// Live (live-session-gateway-ingest@v0) tuning. All four are
-	// configurable per the runner team's plan; defaults match the spec.
-	LiveIdleTimeoutSecs        int `env:"LIVE_IDLE_TIMEOUT_SECS" envDefault:"120"`
-	LiveReconcileIntervalSecs  int `env:"LIVE_RECONCILE_INTERVAL_SECS" envDefault:"30"`
+	// Live control polling and whole output-second authorization increments.
+	LiveReconcileIntervalSecs    int `env:"LIVE_RECONCILE_INTERVAL_SECS" envDefault:"30"`
 	LiveTopupRunwayThresholdSecs int `env:"LIVE_TOPUP_RUNWAY_THRESHOLD_SECS" envDefault:"60"`
-	LiveTopupFundSecs          int `env:"LIVE_TOPUP_FUND_SECS" envDefault:"60"`
-	// LiveMaxTotalUnits caps a LOC live session's lifetime spend (LOC
-	// encumbers toward this ceiling and refuses refills beyond it). At
-	// ~1000 units/sec of output the default funds ~100 minutes.
-	LiveMaxTotalUnits int64 `env:"LIVE_MAX_TOTAL_UNITS" envDefault:"6000000"`
+	LiveTopupFundSecs            int `env:"LIVE_TOPUP_FUND_SECS" envDefault:"60"`
+	// Lifetime ceiling in whole output_seconds (6000 = 100 minutes).
+	LiveMaxTotalUnits int64 `env:"LIVE_MAX_TOTAL_UNITS" envDefault:"6000"`
 
-	// live-session-gateway-ingest@v0 (plan 0003). When LiveRTMPPort > 0
-	// the gateway runs an RTMP server on that port and accepts ingest
-	// from customers. LivePlaybackBaseURL is the public root for HLS
-	// playback (S3 / CDN) — used to build customer-facing URLs.
-	LiveRTMPPort            int    `env:"LIVE_RTMP_PORT" envDefault:"0"`
-	LivePlaybackBaseURL     string `env:"LIVE_PLAYBACK_BASE_URL"`
-	LiveS3CredentialTTLHrs  int    `env:"LIVE_S3_CREDENTIAL_TTL_HOURS" envDefault:"4"`
+	LiveRTMPPort int `env:"LIVE_RTMP_PORT" envDefault:"0"`
 
 	V1RateLimitPerMinute int `env:"V1_RATE_LIMIT_PER_MINUTE" envDefault:"60"`
 	V1RateLimitBurst     int `env:"V1_RATE_LIMIT_BURST" envDefault:"30"`
@@ -98,6 +79,18 @@ func Load() (Config, error) {
 	}
 	cfg.SessionTTL = time.Duration(cfg.SessionTTLHours) * time.Hour
 	cfg.RefreshInterval = time.Duration(cfg.RefreshMS) * time.Millisecond
+	if cfg.RefreshMS <= 0 || cfg.ABRMaxTotalUnits <= 0 || cfg.ABRJobTimeoutSecs <= 0 || cfg.LiveMaxTotalUnits <= 0 || cfg.LiveTopupFundSecs <= 0 || cfg.LiveReconcileIntervalSecs <= 0 || cfg.LiveTopupRunwayThresholdSecs < 0 || cfg.LiveRTMPPort < 0 || cfg.LiveRTMPPort > 65535 {
+		return cfg, fmt.Errorf("config: catalog interval and paid operation limits must be positive")
+	}
+	if cfg.LOCAPIKey != "" && (cfg.CallerPrivateKey == "" || cfg.OperationSecretsKey == "") {
+		return cfg, fmt.Errorf("config: LOC_CALLER_PRIVATE_KEY and OPERATION_SECRETS_KEY are required for v2 paid operations")
+	}
+	if cfg.LiveExternalRTMPURL != "" {
+		u, err := url.Parse(cfg.LiveExternalRTMPURL)
+		if err != nil || (u.Scheme != "rtmp" && u.Scheme != "rtmps") || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Path != "/live" {
+			return cfg, fmt.Errorf("config: LIVE_EXTERNAL_RTMP_URL must be an rtmp(s) server URL ending in /live without a stream key")
+		}
+	}
 	return cfg, nil
 }
 
