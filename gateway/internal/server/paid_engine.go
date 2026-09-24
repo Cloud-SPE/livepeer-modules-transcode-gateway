@@ -315,6 +315,10 @@ func (e *PaidEngine) runABR(ctx context.Context, l *repo.OperationLock, o *repo.
 			s.Claim = claim
 		} else {
 			e.logPaidError(o, s, "broker_exchange_lookup", err)
+			var pending *livepeer.ExchangePendingError
+			if errors.As(err, &pending) && pending.Outcome == "ADMISSION_REJECTED" {
+				v.Status, v.Phase, v.FailureCode = "admission_rejected", "settlement_pending", "broker_admission_rejected"
+			}
 		}
 		// LOC's terminal accounting outcome is authoritative even when the broker
 		// is unavailable. Never label a conservative charge as broker settlement.
@@ -324,6 +328,10 @@ func (e *PaidEngine) runABR(ctx context.Context, l *repo.OperationLock, o *repo.
 				o.State = st.AccountingOutcome
 				v.Status = "failed"
 				v.FailureCode = st.AccountingOutcome
+				v.Phase = "finished"
+				if st.BrokerExchangeOutcome != nil && *st.BrokerExchangeOutcome == "NOT_ADMITTED" {
+					v.FailureCode = "not_admitted"
+				}
 				o.FinishedAt = st.ClosedAt
 				if st.ActualUnits != nil {
 					v.ActualUnits = st.ActualUnits
@@ -340,6 +348,11 @@ func (e *PaidEngine) runABR(ctx context.Context, l *repo.OperationLock, o *repo.
 				return e.deps.Usage.RecordRunnerWebhook(ctx, o.ID, repo.RunnerStateUpdate{Status: map[bool]string{true: "complete", false: "error"}[v.Status == "succeeded"], Phase: v.Phase, Progress: v.Progress, ErrorCode: v.FailureCode, CompletedAt: st.ClosedAt})
 			}
 		}
+	}
+	if s.Claim == nil && v.Status == "admission_rejected" {
+		// A rejection is not signed settlement. Keep polling LOC, but do not
+		// replay a workload whose admission has already been refused.
+		return &livepeer.ExchangePendingError{Outcome: "ADMISSION_REJECTED"}
 	}
 	if s.Claim == nil {
 		auth, err := e.auth(s, s.Job.RequestID, s.Job.SpendAuthorization, s.Job.WorkID)
@@ -421,7 +434,7 @@ func (e *PaidEngine) runABR(ctx context.Context, l *repo.OperationLock, o *repo.
 		}
 	}
 	v.ActualUnits = &claim.ActualUnits
-	v.Status = "failed"
+	v.Status, v.Phase, v.FailureCode = "failed", "finished", ""
 	// Lost content is not fabricated from settlement alone. Safe artifact URLs
 	// are known locally, but the typed terminal result is still required.
 	if v.TerminalOutcome == "succeeded" {

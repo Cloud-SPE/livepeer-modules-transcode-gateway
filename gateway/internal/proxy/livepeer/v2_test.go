@@ -237,7 +237,7 @@ func TestExchangePendingDiagnosticsAreSafe(t *testing.T) {
 	for _, outcome := range []string{"ADMISSION_REJECTED", "IN_FLIGHT", "secret-token"} {
 		t.Run(outcome, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				_ = json.NewEncoder(w).Encode(map[string]any{"outcome": outcome, "detail": "secret-detail", "status": 402})
+				_ = json.NewEncoder(w).Encode(map[string]any{"request_id": "request-1", "outcome": outcome, "detail": "secret-detail", "status": 402})
 			}))
 			defer server.Close()
 			claim, err := NewHTTPClient(time.Second).LookupJobV2(context.Background(), server.URL, "request-1", "", "video-frame-megapixel", "auth-1")
@@ -251,6 +251,22 @@ func TestExchangePendingDiagnosticsAreSafe(t *testing.T) {
 			}
 			if pending.Outcome != expected || strings.Contains(err.Error(), "secret") {
 				t.Fatalf("unsafe outcome: %v", err)
+			}
+		})
+	}
+}
+
+func TestRejectedExchangeRequiresMatchingRequest(t *testing.T) {
+	for _, request := range []string{"", "another-request"} {
+		t.Run(request, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_ = json.NewEncoder(w).Encode(map[string]any{"request_id": request, "outcome": "ADMISSION_REJECTED"})
+			}))
+			defer server.Close()
+			_, err := NewHTTPClient(time.Second).LookupJobV2(context.Background(), server.URL, "request-1", "", "units", "auth-1")
+			var pending *ExchangePendingError
+			if err == nil || errors.As(err, &pending) {
+				t.Fatalf("accepted unrelated rejection: %v", err)
 			}
 		})
 	}

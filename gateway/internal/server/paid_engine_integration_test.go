@@ -23,6 +23,7 @@ import (
 	"github.com/Cloud-SPE/livepeer-modules-transcode-gateway/gateway/internal/proxy/loc"
 	"github.com/Cloud-SPE/livepeer-modules-transcode-gateway/gateway/internal/repo"
 	"github.com/Cloud-SPE/livepeer-modules-transcode-gateway/gateway/internal/s3"
+	"github.com/danielgtaylor/huma/v2/humatest"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -80,6 +81,8 @@ func paidTestPool(t *testing.T) *pgxpool.Pool {
 var fixtureSignature = "0x" + strings.Repeat("1", 130)
 
 type paidFixture struct {
+	admissionRejected, jobNotAdmitted                                                bool
+	jobEstimated, jobLimit                                                           int64
 	blockABR                                                                         <-chan struct{}
 	abrStarted                                                                       chan struct{}
 	t                                                                                *testing.T
@@ -196,6 +199,7 @@ func (f *paidFixture) serve(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case path == "/v1/jobs" && r.Method == "POST":
 		f.jobCreates++
+		f.jobEstimated, f.jobLimit = int64(body["estimated_units"].(float64)), int64(body["max_total_units"].(float64))
 		f.requestID = r.Header.Get("Idempotency-Key")
 		if f.requestID == "" || body["workload_request_digest"] == nil || body["caller_public_key"] == nil {
 			fixtureError(w, 400, "invalid_scope")
@@ -204,6 +208,10 @@ func (f *paidFixture) serve(w http.ResponseWriter, r *http.Request) {
 		fixtureJSON(w, map[string]any{"job_id": f.jobID, "request_id": f.requestID, "work_id": f.workID, "broker_url": f.server.URL, "protocol": "paid-job/v1", "transport": "stream", "work_unit": "video-frame-megapixel", "spend_authorization": base64.StdEncoding.EncodeToString([]byte("job-authorization")), "accounting_mode": "wholesale_account", "funded_value_wei": "1000", "expected_value_wei": "321"})
 	case path == "/v1/job":
 		f.dispatches++
+		if f.admissionRejected {
+			fixtureError(w, 402, "insufficient_balance")
+			return
+		}
 		if r.Header.Get("Livepeer-Protocol") != "paid-job/v1" || r.Header.Get("Livepeer-Caller-Proof") == "" {
 			fixtureError(w, 401, "missing_proof")
 			return
@@ -220,6 +228,10 @@ func (f *paidFixture) serve(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Livepeer-Settlement", f.claimHeader(false))
 		}
 	case strings.HasPrefix(path, "/v1/exchange/"):
+		if f.admissionRejected {
+			fixtureJSON(w, map[string]any{"request_id": f.requestID, "outcome": "ADMISSION_REJECTED"})
+			return
+		}
 		if !f.evidence || !f.exchangeAvailable {
 			fixtureError(w, 404, "not_ready")
 			return
@@ -233,6 +245,10 @@ func (f *paidFixture) serve(w http.ResponseWriter, r *http.Request) {
 		f.settles++
 		fixtureJSON(w, map[string]any{"job_id": f.jobID, "work_id": f.workID, "closed_at": time.Now(), "billed_value_wei": "321", "actual_units": 321})
 	case strings.HasPrefix(path, "/v1/jobs/"):
+		if f.jobNotAdmitted {
+			fixtureJSON(w, map[string]any{"job_id": f.jobID, "state": "closed", "accounting_outcome": "broker_settled", "broker_exchange_outcome": "NOT_ADMITTED", "actual_units": 0, "billed_value_wei": "0", "closed_at": time.Now()})
+			return
+		}
 		fixtureJSON(w, map[string]any{"job_id": f.jobID, "state": "open", "work_id": f.workID})
 	case path == "/v1/sessions/prepare":
 		fixtureJSON(w, map[string]any{"gateway_session_id": f.gatewayID, "broker_url": f.server.URL, "preparation_token": "prepare-secret", "route_binding": map[string]any{}, "expires_at": time.Now().Add(time.Hour)})
@@ -655,5 +671,93 @@ func TestPaidLongABRStreamsDoNotStarveLiveStop(t *testing.T) {
 			t.Fatal("two long ABR streams starved live stop/reconciliation")
 		case <-tick.C:
 		}
+	}
+}
+
+func TestPaidABRAdmissionRejectionWaitsForLOCAndSurvivesRestart(t *testing.T) {
+	f := newPaidFixture(t)
+	f.admissionRejected = true
+	id := f.submitABR("rejected")
+	if err := f.process(id); err == nil {
+		t.Fatal("expected broker refusal")
+	}
+	if err := f.process(id); err == nil {
+		t.Fatal("expected pending recovery")
+	}
+	ctx := context.Background()
+	view, err := f.engine.ViewABR(ctx, id, f.key.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.Body.Job.Status != "admission_rejected" || view.Body.Job.ErrorCode != "broker_admission_rejected" || view.Body.Job.Error == "" || view.Body.Job.MasterPlaylistURL != "" {
+		t.Fatalf("pending view: %+v", view.Body.Job)
+	}
+	if f.operation(id).FinishedAt != nil || f.settles != 0 || f.dispatches != 1 {
+		t.Fatal("rejection was finalized or redispatched")
+	}
+	public, err := f.engine.ops.PublicViews(ctx, []uuid.UUID{id})
+	if err != nil || public[id] == nil || len(public[id].Secrets) != 0 {
+		t.Fatalf("admin projection: %v %v", public, err)
+	}
+	_, api := humatest.New(t)
+	registerAdminABRJobs(api, f.engine.deps)
+	response := api.Get("/api/admin/abr-jobs")
+	var listing struct {
+		Items []AdminABRJobView `json:"items"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &listing); err != nil {
+		t.Fatal(err)
+	}
+	if response.Code != 200 || len(listing.Items) != 1 || listing.Items[0].Status != "admission_rejected" || listing.Items[0].AccountingState != "dispatching" || listing.Items[0].ErrorText == "" {
+		t.Fatalf("admin rejection status: %s", response.Body.String())
+	}
+	f.restart()
+	if err := f.process(id); err == nil {
+		t.Fatal("expected pending recovery after restart")
+	}
+	if f.dispatches != 1 {
+		t.Fatal("replayed rejected workload")
+	}
+	f.jobNotAdmitted = true
+	if err := f.process(id); err != nil {
+		t.Fatal(err)
+	}
+	view, err = f.engine.ViewABR(ctx, id, f.key.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := view.Body.Job
+	if job.Status != "failed" || job.ErrorCode != "not_admitted" || job.AccountingState != "broker_settled" || job.ActualUnits == nil || *job.ActualUnits != 0 || job.MasterPlaylistURL != "" || f.operation(id).FinishedAt == nil {
+		t.Fatalf("terminal view: %+v", job)
+	}
+}
+
+func TestPaidABRAuthorizationUsesPersistedWorkloadBound(t *testing.T) {
+	f := newPaidFixture(t)
+	id := f.submitABR("bounded")
+	// Configuration changes must not enlarge an existing durable authorization.
+	f.engine.deps.Cfg.ABRMaxTotalUnits = 2000000
+	f.restart()
+	if err := f.process(id); err != nil {
+		t.Fatal(err)
+	}
+	if f.jobEstimated != 2182 || f.jobLimit != 2728 {
+		t.Fatalf("estimate=%d limit=%d", f.jobEstimated, f.jobLimit)
+	}
+	if got := f.submitABR("bounded"); got != id {
+		t.Fatal("idempotent retry replaced job")
+	}
+	in := &ABRIn{IdempotencyKey: "explicit-bound"}
+	in.Body.InputURL = f.server.URL + "/input.mp4"
+	in.Body.EstimatedSecs = 10
+	in.Body.MaxTotalUnits = 5000
+	out, err := f.engine.SubmitABR(context.Background(), f.key, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	o := f.operation(out.Body.Job.ID)
+	s, _, err := f.engine.decode(o)
+	if err != nil || s.LimitUnits != 5000 {
+		t.Fatalf("explicit bound: %+v %v", s, err)
 	}
 }

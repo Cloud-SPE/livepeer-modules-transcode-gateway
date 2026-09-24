@@ -217,6 +217,9 @@ func (c *HTTPClient) LookupJobV2(ctx context.Context, brokerURL, requestID, expe
 	if err != nil {
 		return nil, err
 	}
+	if scalar(body["request_id"]) != requestID {
+		return nil, fmt.Errorf("broker: exchange request identity mismatch")
+	}
 	if scalar(body["outcome"]) != "SETTLED" {
 		outcome := scalar(body["outcome"])
 		switch outcome {
@@ -225,9 +228,6 @@ func (c *HTTPClient) LookupJobV2(ctx context.Context, brokerURL, requestID, expe
 			outcome = "UNKNOWN"
 		}
 		return nil, &ExchangePendingError{Outcome: outcome}
-	}
-	if scalar(body["request_id"]) != requestID {
-		return nil, fmt.Errorf("broker: exchange request identity mismatch")
 	}
 	encoded := headers.Get(HeaderSettlement)
 	fromBody := scalar(body["settlement"])

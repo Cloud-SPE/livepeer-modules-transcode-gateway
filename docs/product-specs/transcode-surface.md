@@ -34,6 +34,29 @@ Response:
 
 See the generated `/openapi.json` for request fields and [Modules v2](../design-docs/modules-v2.md) for the paid-job workload boundary.
 
+New ABR jobs authorize the duration-based estimate plus 25% headroom, rounded
+up and capped by `ABR_MAX_TOTAL_UNITS`. The estimate sums the preset's video
+rendition pixels × 60 fps × `estimated_input_seconds`, divides by one million,
+and rounds up once. Omitted/zero duration uses 60 seconds. Audio adds no units.
+Provide an accurate duration rounded up; for higher frame rates or uncertain
+inputs, specify `max_total_units` explicitly. An explicit cap must cover the
+estimate and stay within the server ceiling. These are authorization bounds,
+not measured charges or a guarantee that an underestimated input can complete.
+Existing jobs retain their persisted bounds, including on idempotent retries.
+
+### `GET /api/v1/abr/:id`
+
+`status=admission_rejected`, `phase=settlement_pending`, and
+`error_code=broker_admission_rejected` mean the broker refused admission and
+LOC has not yet finalized accounting. Keep polling; this is not a successful
+transcode, a confirmed refund, or permission to submit a replacement automatically.
+The gateway polls recovery without replaying a definitively rejected workload.
+After LOC confirms terminal `NOT_ADMITTED`, status becomes `failed` with
+`error_code=not_admitted`; `accounting_state` remains the authoritative LOC
+accounting outcome. Playback links appear only for verified success.
+The admin listing exposes `status`, `accounting_state`, and `error_code`
+separately from the reservation's legacy `state`.
+
 ### `POST /api/v1/live`
 
 See the generated `/openapi.json` for request fields and [Modules v2](../design-docs/modules-v2.md) for session descriptors and grants.

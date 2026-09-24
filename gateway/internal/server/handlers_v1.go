@@ -167,7 +167,8 @@ type ABRIn struct {
 		InputURL      string     `json:"input_url" required:"true" format:"uri"`
 		Preset        string     `json:"preset,omitempty" enum:"abr-standard,abr-premium,abr-mobile,abr-hevc,abr-av1" doc:"Runner preset. Defaults to abr-standard."`
 		Ladder        *ABRLadder `json:"ladder,omitempty"`
-		EstimatedSecs int        `json:"estimated_input_seconds,omitempty" minimum:"0"`
+		EstimatedSecs int        `json:"estimated_input_seconds,omitempty" minimum:"0" doc:"Input duration in seconds, rounded up. Defaults to 60; estimate assumes 60 fps."`
+		MaxTotalUnits int64      `json:"max_total_units,omitempty" minimum:"0" doc:"Optional authorization cap in video-frame-megapixels. Must cover the estimate and fit the server ceiling. Defaults to estimate plus 25% headroom."`
 	}
 }
 

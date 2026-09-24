@@ -100,8 +100,10 @@ exposes **two tabs**:
   playlist when ready. Succeeded rows expose **Copy URL** (master
   playlist) and a `▸ N variants` toggle that expands per-rendition
   rows with **Play this one** + **Copy URL** per variant. Failed rows
-  render an inline sub-row that surfaces the runner's raw `error_code`
-  and `error` strings verbatim — there is no translation layer.
+  render an inline sub-row with API `error_code` and `error` details.
+  Admission rejection displays “Settlement pending” with its explanation,
+  continues polling, and offers Retry only after terminal failure. The API
+  supplies bounded workflow messages rather than raw upstream errors.
 
 Both tabs use the user's API key from the cookie session indirectly
 (the portal calls `/api/v1/*` with the bearer key the user pasted at

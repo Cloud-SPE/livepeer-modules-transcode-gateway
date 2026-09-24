@@ -37,6 +37,24 @@ const operationColumns = `id,api_key_id,reservation_id,live_stream_id,kind,reque
 type OperationRepo struct{ pool *pgxpool.Pool }
 
 func NewOperationRepo(pool *pgxpool.Pool) *OperationRepo { return &OperationRepo{pool: pool} }
+
+// PublicViews excludes encrypted credentials and request material from listings.
+func (r *OperationRepo) PublicViews(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]*PaidOperation, error) {
+	rows, err := r.pool.Query(ctx, `SELECT id,state,public_json FROM paid_operations WHERE id=ANY($1::uuid[])`, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[uuid.UUID]*PaidOperation)
+	for rows.Next() {
+		o := new(PaidOperation)
+		if err := rows.Scan(&o.ID, &o.State, &o.PublicJSON); err != nil {
+			return nil, err
+		}
+		out[o.ID] = o
+	}
+	return out, rows.Err()
+}
 func scanOperation(row pgx.Row) (*PaidOperation, error) {
 	o := new(PaidOperation)
 	err := row.Scan(&o.ID, &o.APIKeyID, &o.ReservationID, &o.LiveStreamID, &o.Kind, &o.RequestKey, &o.RequestHash, &o.State, &o.Secrets, &o.PublicJSON, &o.LastError, &o.Attempts, &o.NextAttemptAt, &o.StopRequested, &o.CreatedAt, &o.UpdatedAt, &o.FinishedAt)

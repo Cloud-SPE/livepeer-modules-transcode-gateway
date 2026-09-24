@@ -342,6 +342,7 @@ Stream Key: ${s.ingest.stream_key}</pre>
     const status = u.job?.status || 'not submitted';
     const done   = status === 'succeeded';
     const failed = status === 'failed';
+    const rejected = status === 'admission_rejected';
     const errCode = u.job?.error_code || '';
     const errText = u.job?.error || '';
     const masterURL = u.job?.master_playlist_url || '';
@@ -355,7 +356,7 @@ Stream Key: ${s.ingest.stream_key}</pre>
       </td>
       <td>${new Date(u.uploaded_at).toLocaleString()}</td>
       <td>${u.job?.id ? html`<code>${u.job.id.slice(0, 8)}…</code>` : html`<span class="msg">—</span>`}</td>
-      <td><span class="pill ${done ? 'ok' : failed ? 'warn' : ''}">${status}</span></td>
+      <td><span class="pill ${done ? 'ok' : failed || rejected ? 'warn' : ''}">${rejected ? 'Settlement pending' : status}</span></td>
       <td>
         ${done && masterURL
           ? html`<button class="ghost" @click=${() => this.#play(u.id)}>Play</button>
@@ -377,7 +378,7 @@ Stream Key: ${s.ingest.stream_key}</pre>
         <button class="ghost danger" @click=${() => this.#removeUpload(u.id)}>Delete</button>
       </td>
     </tr>
-    ${failed
+    ${failed || rejected
       ? html`<tr class="error-row"><td colspan="5">
           ${errCode ? html`<code>${errCode}</code>` : ''}
           ${errCode && errText ? html`<br>` : ''}
@@ -561,7 +562,7 @@ Stream Key: ${s.ingest.stream_key}</pre>
         });
         const cur = this.uploads.find((x) => x.id === uploadId);
         if (!this.isConnected || this._pollers.get(uploadId) !== id || cur?.job?.id !== u.job.id) return;
-        const merged = { ...(cur?.job || {}), ...r.job };
+        const merged = r.job; // Each poll is authoritative, including cleared error fields.
         this.#updateUpload(uploadId, { job: merged });
         if (merged.status === 'succeeded' || merged.status === 'failed') {
           clearInterval(id);

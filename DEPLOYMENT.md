@@ -87,6 +87,13 @@ RTMP at all. If changing the internal listener port, change the mapping too.
 | `LIVE_TOPUP_RUNWAY_THRESHOLD_SECS` | `60` | Remaining runway at which to request a refill |
 | `LIVE_TOPUP_FUND_SECS` | `60` | Additional output seconds requested per refill |
 
+For new ABR jobs, the gateway requests a per-job authorization based on its
+60-fps duration/preset estimate plus 25% headroom; `ABR_MAX_TOTAL_UNITS` is
+only the hard ceiling. API callers can supply `max_total_units` to cover
+higher-frame-rate or uncertain inputs, subject to that ceiling. Existing
+persisted authorizations are unchanged. This reduces excessive reservations
+but does not replace LOC's responsibility to fund the selected receiver.
+
 Do not carry forward the old live default of `6000000`: it represented a
 millisecond-style estimate and grants a much larger cap in whole seconds.
 LOC quotes use `price_per_work_unit_wei / units_per_price`; preserve the

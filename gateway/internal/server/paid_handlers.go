@@ -63,6 +63,11 @@ func (e *PaidEngine) SubmitABR(ctx context.Context, ak *repo.APIKey, in *ABRIn) 
 	if err := e.checkOffering(ctx, e.deps.Cfg.ABRCapability, e.deps.Cfg.ABROffering, "paid-job/v1", "video-frame-megapixel"); err != nil {
 		return nil, err
 	}
+	estimated := estimateABRUnits(preset, in.Body.EstimatedSecs)
+	limit, err := abrAuthorizationLimit(estimated, in.Body.MaxTotalUnits, e.deps.Cfg.ABRMaxTotalUnits)
+	if err != nil {
+		return nil, err
+	}
 	id := uuid.New()
 	outputs, master, err := mintABROutputs(ctx, e.deps, ak.ID.String(), id.String(), preset)
 	if err != nil {
@@ -85,11 +90,7 @@ func (e *PaidEngine) SubmitABR(ctx context.Context, ak *repo.APIKey, in *ABRIn) 
 	if err != nil {
 		return nil, err
 	}
-	estimated := estimateABRUnits(preset, in.Body.EstimatedSecs)
-	if estimated > e.deps.Cfg.ABRMaxTotalUnits {
-		return nil, huma.Error400BadRequest("estimated video-frame-megapixel exceeds ABR_MAX_TOTAL_UNITS")
-	}
-	s := &operationSecrets{Capability: e.deps.Cfg.ABRCapability, Offering: e.deps.Cfg.ABROffering, Body: body, CallerPublicKey: e.signer.PublicKey(), EstimatedUnits: estimated, LimitUnits: e.deps.Cfg.ABRMaxTotalUnits}
+	s := &operationSecrets{Capability: e.deps.Cfg.ABRCapability, Offering: e.deps.Cfg.ABROffering, Body: body, CallerPublicKey: e.signer.PublicKey(), EstimatedUnits: estimated, LimitUnits: limit}
 	v := &operationView{Status: "queued", Preset: presetName, MasterURL: master, Renditions: listed, WorkUnit: "video-frame-megapixel"}
 	o := &repo.PaidOperation{ID: id, APIKeyID: ak.ID, ReservationID: uuid.New(), Kind: "abr", RequestKey: key, RequestHash: hash, State: "queued"}
 	if err = e.seal(o, s, v); err != nil {
@@ -106,8 +107,28 @@ func (e *PaidEngine) SubmitABR(ctx context.Context, ak *repo.APIKey, in *ABRIn) 
 	e.Wake()
 	return e.ViewABR(ctx, id, ak.ID)
 }
+
+// abrAuthorizationLimit bounds a new job, never an already-issued authorization.
+func abrAuthorizationLimit(estimated, requested, ceiling int64) (int64, error) {
+	if estimated > ceiling {
+		return 0, huma.Error400BadRequest("estimated video-frame-megapixel exceeds ABR_MAX_TOTAL_UNITS")
+	}
+	if requested < 0 || requested > ceiling || (requested > 0 && requested < estimated) {
+		return 0, huma.Error400BadRequest("max_total_units must cover the estimate and not exceed ABR_MAX_TOTAL_UNITS")
+	}
+	if requested > 0 {
+		return requested, nil
+	}
+	// Add 25% headroom, rounded up, without overflowing near the policy ceiling.
+	headroom := estimated / 4
+	if estimated%4 != 0 {
+		headroom++
+	}
+	return estimated + min(headroom, ceiling-estimated), nil
+}
+
 func estimateABRUnits(preset abr.Preset, seconds int) int64 {
-	// Estimates size admission only; signed measured units determine billing.
+	// Duration and preset size the authorization; signed measured units determine billing.
 	// Sixty fps is a conservative estimate when clients only know duration.
 	if seconds <= 0 {
 		seconds = 60
@@ -137,7 +158,7 @@ func (e *PaidEngine) ViewABR(ctx context.Context, id, key uuid.UUID) (*ABROut, e
 		return nil, err
 	}
 	out := &ABROut{}
-	out.Body.Job = ABRJob{ID: id, Status: v.Status, Phase: v.Phase, OverallProgress: v.Progress, ErrorCode: v.FailureCode, MasterPlaylistURL: v.MasterURL, Renditions: v.Renditions, CreatedAt: o.CreatedAt, AccountingState: o.State, ActualUnits: v.ActualUnits, WorkUnit: v.WorkUnit}
+	out.Body.Job = ABRJob{ID: id, Status: v.Status, Phase: v.Phase, OverallProgress: v.Progress, ErrorCode: v.FailureCode, MasterPlaylistURL: v.MasterURL, Renditions: v.Renditions, CreatedAt: o.CreatedAt, AccountingState: o.State, Error: abrStatusMessage(v.Status, v.FailureCode), ActualUnits: v.ActualUnits, WorkUnit: v.WorkUnit}
 	// URLs are prepared destinations, not success signals. Keep playback hidden
 	// until the runner result and verified accounting both completed.
 	if v.Status != "succeeded" {

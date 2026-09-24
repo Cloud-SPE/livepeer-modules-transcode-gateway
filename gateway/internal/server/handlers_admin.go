@@ -394,9 +394,17 @@ func registerAdminABRJobs(api huma.API, deps Deps) {
 		if err != nil {
 			return nil, huma.Error500InternalServerError("abr jobs list", err)
 		}
+		ids := make([]uuid.UUID, 0, len(rows))
+		for _, r := range rows {
+			ids = append(ids, r.WorkID)
+		}
+		operations, err := repo.NewOperationRepo(deps.Pool).PublicViews(ctx, ids)
+		if err != nil {
+			return nil, huma.Error500InternalServerError("abr operation list", err)
+		}
 		out := &AdminABRJobsOut{}
 		for _, r := range rows {
-			out.Body.Items = append(out.Body.Items, AdminABRJobView{
+			item := AdminABRJobView{
 				WorkID:      r.WorkID,
 				APIKeyID:    r.APIKeyID,
 				RunnerJobID: derefString(r.RunnerJobID),
@@ -407,7 +415,16 @@ func registerAdminABRJobs(api huma.API, deps Deps) {
 				ErrorText:   derefString(r.ErrorText),
 				CreatedAt:   r.CreatedAt,
 				ResolvedAt:  r.ResolvedAt,
-			})
+			}
+			if op := operations[r.WorkID]; op != nil {
+				var view operationView
+				if err := json.Unmarshal(op.PublicJSON, &view); err != nil {
+					return nil, huma.Error500InternalServerError("abr operation view", err)
+				}
+				item.Status, item.AccountingState, item.ErrorCode = view.Status, op.State, view.FailureCode
+				item.ErrorText = abrStatusMessage(view.Status, view.FailureCode)
+			}
+			out.Body.Items = append(out.Body.Items, item)
 		}
 		return out, nil
 	})
@@ -615,16 +632,19 @@ type AdminLiveStreamsOut struct {
 }
 
 type AdminABRJobView struct {
-	WorkID      uuid.UUID  `json:"work_id"`
-	APIKeyID    uuid.UUID  `json:"api_key_id"`
-	RunnerJobID string     `json:"runner_job_id,omitempty"`
-	State       string     `json:"state"`
-	BrokerURL   string     `json:"broker_url,omitempty"`
-	LatencyMs   int        `json:"latency_ms,omitempty"`
-	StatusCode  int        `json:"status_code,omitempty"`
-	ErrorText   string     `json:"error_text,omitempty"`
-	CreatedAt   time.Time  `json:"created_at"`
-	ResolvedAt  *time.Time `json:"resolved_at,omitempty"`
+	Status          string     `json:"status,omitempty"`
+	AccountingState string     `json:"accounting_state,omitempty"`
+	ErrorCode       string     `json:"error_code,omitempty"`
+	WorkID          uuid.UUID  `json:"work_id"`
+	APIKeyID        uuid.UUID  `json:"api_key_id"`
+	RunnerJobID     string     `json:"runner_job_id,omitempty"`
+	State           string     `json:"state"`
+	BrokerURL       string     `json:"broker_url,omitempty"`
+	LatencyMs       int        `json:"latency_ms,omitempty"`
+	StatusCode      int        `json:"status_code,omitempty"`
+	ErrorText       string     `json:"error_text,omitempty"`
+	CreatedAt       time.Time  `json:"created_at"`
+	ResolvedAt      *time.Time `json:"resolved_at,omitempty"`
 }
 
 type AdminABRJobsOut struct {
