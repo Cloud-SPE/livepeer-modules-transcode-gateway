@@ -56,3 +56,9 @@ docs/generated/*
 # directory.
 gateway/internal/server/webroot/*
 !gateway/internal/server/webroot/.gitkeep
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key
+.beads/proxieddb/
