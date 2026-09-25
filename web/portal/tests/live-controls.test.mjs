@@ -94,3 +94,30 @@ test('history stop is retryable and remains tracked through refresh', async () =
   await stop(); assert.equal(f.instance.rows[0].status,'ending'); assert.equal(f.instance.stopping.size,1);
   f.instance.disconnectedCallback(); assert.equal(f.timers.size,0);
 });
+
+test('ended media keeps polling pending settlement across refresh', async () => {
+  let pending = true;
+  const f = await fixture('cc-playground.js', path => {
+    if (path === '/v1/capabilities') return {data:[]};
+    const session = {id:'owned',status:'ended',settlement_pending:pending};
+    if (path.startsWith('/portal/live-streams?')) return {items:[session]};
+    if (path === '/portal/live-streams/owned') return {session};
+    throw Error('Unexpected '+path);
+  });
+  await f.instance.connectedCallback();
+  assert.equal(f.instance.liveSession.status,'ended');
+  assert.equal(f.timers.size,1);
+  async function tick() {
+    const [id, fn] = [...f.timers.entries()][0];
+    f.timers.delete(id);
+    await fn();
+  }
+  await tick();
+  assert.equal(f.timers.size,1);
+  assert.equal(f.instance.livePlaying,false);
+  pending = false;
+  await tick();
+  assert.equal(f.instance.liveSession.settlement_pending,false);
+  assert.equal(f.timers.size,0);
+  f.instance.disconnectedCallback();
+});

@@ -82,7 +82,7 @@ class CcPlayground extends LitElement {
     super.connectedCallback();
     await Promise.all([this.#loadCaps(), this.#restoreLive()]);
     if (!this.isConnected) return;
-    if (this.liveSession && !isLiveTerminal(this.liveSession)) this.#startLivePoll();
+    if (needsLivePolling(this.liveSession)) this.#startLivePoll();
     // Resume polling any uploads that have a running job.
     for (const u of this.uploads) {
       if (u.job && u.job.id && u.job.status !== 'succeeded' && u.job.status !== 'failed') {
@@ -155,7 +155,7 @@ class CcPlayground extends LitElement {
     try {
       const data = await api('/portal/live-streams?limit=500');
       if (!this.isConnected) return;
-      this.liveSessions = (data?.items || []).filter(s => !isLiveTerminal(s));
+      this.liveSessions = (data?.items || []).filter(s => needsLivePolling(s));
       const selected = sessionStorage.getItem(LIVE_SELECTION);
       const session = this.liveSessions.find(s => s.id === selected) || this.liveSessions[0];
       if (!this.liveSession && session) await this.#selectLive(session.id);
@@ -212,6 +212,8 @@ class CcPlayground extends LitElement {
       <p role="status"><strong>Status:</strong> ${s.status || 'provisioning'}
         ${s.output_state ? html` · Output: ${s.output_state}` : ''}</p>
       ${this.liveStatusError ? html`<p class="msg warn">${this.liveStatusError}</p>` : ''}
+      ${s.settlement_pending ? html`<p class="msg">Stream ended. Final usage settlement is pending.</p>` : ''}
+      ${s.last_failure_code === 'refill_refused' ? html`<p class="msg warn">The stream ended because its authorization refill was refused.</p>` : ''}
       ${s.last_failure_code || s.close_reason
         ? html`<p class="msg">${s.last_failure_code || s.close_reason}</p>` : ''}
       ${terminal
@@ -277,7 +279,7 @@ Stream Key: ${s.ingest.stream_key}</pre>
 
   #startLivePoll() {
     this.#stopLivePoll();
-    if (!this.isConnected || !this.liveSession?.id || isLiveTerminal(this.liveSession)) return;
+    if (!this.isConnected || !this.liveSession?.id || !needsLivePolling(this.liveSession)) return;
     const sessionID = this.liveSession.id;
     const key = this.apiKey;
     const generation = this._livePollGeneration;
@@ -298,10 +300,12 @@ Stream Key: ${s.ingest.stream_key}</pre>
         };
         this.liveStatusError = '';
         if (isLiveTerminal(this.liveSession)) {
-          this.#stopLivePoll();
           this.#tearDownHls();
           this.livePlaying = false;
-          return;
+          if (!this.liveSession.settlement_pending) {
+            this.#stopLivePoll();
+            return;
+          }
         }
       } catch (err) {
         if (!current()) return;
@@ -744,6 +748,8 @@ Stream Key: ${s.ingest.stream_key}</pre>
     window.__lvpApiKey = '';
   };
 }
+
+function needsLivePolling(session) { return Boolean(session && (!isLiveTerminal(session) || session.settlement_pending)); }
 
 function isLiveTerminal(session) {
   return Boolean(session && (session.ended_at || ['ended', 'failed', 'closed', 'expired'].includes(session.status)));

@@ -311,18 +311,19 @@ type LivePlayback struct {
 }
 
 type LiveSessionView struct {
-	AccountingState string       `json:"accounting_state,omitempty"`
-	OutputState     string       `json:"output_state,omitempty"`
-	ActualUnits     int64        `json:"actual_units"`
-	LastFailureCode string       `json:"last_failure_code,omitempty"`
-	ID              uuid.UUID    `json:"id"`
-	Status          string       `json:"status"`
-	Ingest          LiveIngest   `json:"ingest"`
-	Playback        LivePlayback `json:"playback"`
-	CloseReason     string       `json:"close_reason,omitempty"`
-	CreatedAt       time.Time    `json:"created_at"`
-	StartedAt       *time.Time   `json:"started_at,omitempty"`
-	EndedAt         *time.Time   `json:"ended_at,omitempty"`
+	SettlementPending bool         `json:"settlement_pending"`
+	AccountingState   string       `json:"accounting_state,omitempty"`
+	OutputState       string       `json:"output_state,omitempty"`
+	ActualUnits       int64        `json:"actual_units"`
+	LastFailureCode   string       `json:"last_failure_code,omitempty"`
+	ID                uuid.UUID    `json:"id"`
+	Status            string       `json:"status"`
+	Ingest            LiveIngest   `json:"ingest"`
+	Playback          LivePlayback `json:"playback"`
+	CloseReason       string       `json:"close_reason,omitempty"`
+	CreatedAt         time.Time    `json:"created_at"`
+	StartedAt         *time.Time   `json:"started_at,omitempty"`
+	EndedAt           *time.Time   `json:"ended_at,omitempty"`
 }
 
 type LiveCreateOut struct {

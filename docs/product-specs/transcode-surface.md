@@ -104,3 +104,14 @@ Per `api_key_id` token bucket: 60 / min, burst 30. Configurable via
 - Server-sent events / webhooks
 - Gateway-side playback proxy
 - Per-key capability scoping
+
+### Live termination and settlement
+
+Live responses expose `settlement_pending`. Once broker termination or terminal
+evidence confirms media has ended, status becomes `ended` or `failed`, `ended_at`
+is recorded, ingest is closed, and stream-key recovery is disabled. Accounting
+may still be pending: the durable operation remains queued until LOC validates
+final evidence. Usage is neither committed nor refunded merely because media
+ended. Portal history and the selected stream continue polling pending settlement.
+A definitive broker `refill_refused` stops replaying that revision and requests
+termination; ambiguous failures retain idempotent recovery. See bead `vgw-e2o`.

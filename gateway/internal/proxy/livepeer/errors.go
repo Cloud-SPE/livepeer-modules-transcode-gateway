@@ -1,6 +1,7 @@
 package livepeer
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -56,4 +57,19 @@ func IsInvalidRecipientRandError(err error) bool {
 		return false
 	}
 	return strings.Contains(be.Body, "INVALID_RECIPIENT_RAND")
+}
+
+// IsRefillRefusedError matches only the broker's durable, definitive rejection.
+// A generic 409 or a transport failure may hide an accepted successor.
+func IsRefillRefusedError(err error) bool {
+	var be *BrokerError
+	if !errors.As(err, &be) || be.StatusCode != 409 {
+		return false
+	}
+	var body struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	return json.Unmarshal([]byte(be.Body), &body) == nil && body.Error.Code == "refill_refused"
 }

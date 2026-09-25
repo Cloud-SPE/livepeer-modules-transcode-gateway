@@ -32,6 +32,8 @@ type PaidEngine struct {
 }
 
 type operationSecrets struct {
+	RefillRefused bool
+
 	Capability           string
 	Offering             string
 	Body                 json.RawMessage
@@ -98,6 +100,8 @@ type brokerSession struct {
 }
 
 type operationView struct {
+	MediaEndedAt *time.Time `json:"media_ended_at,omitempty"`
+
 	Status          string         `json:"status"`
 	Phase           string         `json:"phase,omitempty"`
 	Progress        float64        `json:"progress,omitempty"`
@@ -509,7 +513,7 @@ func (e *PaidEngine) runLive(ctx context.Context, l *repo.OperationLock, o *repo
 		}
 	}
 	if s.Claim != nil {
-		return e.finishLive(ctx, o, s, v)
+		return e.finishLive(ctx, l, o, s, v)
 	}
 	if s.Broker == nil {
 		auth, err := e.auth(s, s.Session.RequestID, s.Session.SpendAuthorization, s.Session.WorkID)
@@ -532,7 +536,7 @@ func (e *PaidEngine) runLive(ctx context.Context, l *repo.OperationLock, o *repo
 				if saveErr := e.save(ctx, l, o, s, v); saveErr != nil {
 					return saveErr
 				}
-				return e.finishLive(ctx, o, s, v)
+				return e.finishLive(ctx, l, o, s, v)
 			}
 			if recovered, recoveryErr := e.recoverClosedLive(ctx, o, s, v); recovered || recoveryErr != nil {
 				return recoveryErr
@@ -569,7 +573,7 @@ func (e *PaidEngine) runLive(ctx context.Context, l *repo.OperationLock, o *repo
 	if o.StopRequested && e.deps.RTMPProbe != nil {
 		e.deps.RTMPProbe.CloseSession(o.ID.String())
 	}
-	if s.RefillID != "" {
+	if s.RefillID != "" && !s.RefillRefused {
 		if err = e.refillLive(ctx, l, o, s, v); err != nil {
 			return err
 		}
@@ -616,6 +620,10 @@ func (e *PaidEngine) runLive(ctx context.Context, l *repo.OperationLock, o *repo
 		s.EndReason = status.CloseReason
 		if s.EndReason == "" {
 			s.EndReason = "runner_ended"
+		}
+		applyLiveTerminalView(s, v, status.Usage.ClaimedTotal)
+		if err := e.observeLiveEnd(ctx, o, s, v); err != nil {
+			return err
 		}
 		return e.endLive(ctx, l, o, s, v)
 	}
@@ -667,6 +675,17 @@ func (e *PaidEngine) refillLive(ctx context.Context, l *repo.OperationLock, o *r
 	}
 	response, err := e.deps.HTTP.TopUpSessionV2(ctx, s.Session.BrokerURL, s.Broker.SessionID, s.Broker.Credential, auth, s.RefillBody)
 	if err != nil {
+		if livepeer.IsRefillRefusedError(err) {
+			// Keep both grant identities for settlement recovery, but never replay
+			// a revision the broker has definitively refused.
+			s.RefillRefused = true
+			s.EndReason = "gateway_close"
+			v.FailureCode = "refill_refused"
+			if err := e.save(ctx, l, o, s, v); err != nil {
+				return err
+			}
+			return e.endLive(ctx, l, o, s, v)
+		}
 		// A runner can terminate before a newly issued revision is delivered.
 		// Its signed predecessor claim is still valid LOC settlement evidence.
 		if claim, claimErr := e.lookupLiveClaim(ctx, s); claimErr == nil {
@@ -674,7 +693,7 @@ func (e *PaidEngine) refillLive(ctx context.Context, l *repo.OperationLock, o *r
 			if saveErr := e.save(ctx, l, o, s, v); saveErr != nil {
 				return saveErr
 			}
-			return e.finishLive(ctx, o, s, v)
+			return e.finishLive(ctx, l, o, s, v)
 		}
 		if recovered, recoveryErr := e.recoverClosedLive(ctx, o, s, v); recovered || recoveryErr != nil {
 			return recoveryErr
@@ -719,9 +738,11 @@ func (e *PaidEngine) lookupLiveClaim(ctx context.Context, s *operationSecrets) (
 	return claim, nil
 }
 func (e *PaidEngine) endLive(ctx context.Context, l *repo.OperationLock, o *repo.PaidOperation, s *operationSecrets, v *operationView) error {
-	o.State = "ending"
-	v.Status = "ending"
-	v.CloseReason = s.EndReason
+	if v.MediaEndedAt == nil {
+		o.State = "ending"
+		v.Status = "ending"
+		v.CloseReason = s.EndReason
+	}
 	if err := e.save(ctx, l, o, s, v); err != nil {
 		return err
 	}
@@ -751,7 +772,7 @@ func (e *PaidEngine) endLive(ctx context.Context, l *repo.OperationLock, o *repo
 			return err
 		}
 	}
-	return e.finishLive(ctx, o, s, v)
+	return e.finishLive(ctx, l, o, s, v)
 }
 
 // recoverClosedLive uses LOC's authenticated final accounting, which the LOC
@@ -774,10 +795,18 @@ func (e *PaidEngine) recoverClosedLive(ctx context.Context, o *repo.PaidOperatio
 	}
 	return true, e.finalizeLiveProjection(ctx, o, s, v, *status.ActualUnits, *status.ClosedAt)
 }
-func (e *PaidEngine) finishLive(ctx context.Context, o *repo.PaidOperation, s *operationSecrets, v *operationView) error {
+func (e *PaidEngine) finishLive(ctx context.Context, l *repo.OperationLock, o *repo.PaidOperation, s *operationSecrets, v *operationView) error {
 	claim := s.Claim
 	if claim == nil {
 		return errors.New("live terminal claim required")
+	}
+	// Media termination is independent of LOC accepting final accounting.
+	applyLiveTerminalView(s, v, claim.ActualUnits)
+	if err := e.observeLiveEnd(ctx, o, s, v); err != nil {
+		return err
+	}
+	if err := e.save(ctx, l, o, s, v); err != nil {
+		return err
 	}
 	closed, err := e.deps.LOC.CloseSessionV2(ctx, s.Session.SessionID, loc.CloseSessionRequestV2{ActualUnits: claim.ActualUnits, Settlement: claim.Settlement})
 	if err != nil {
@@ -808,7 +837,7 @@ func applyLiveTerminalView(s *operationSecrets, v *operationView, actualUnits in
 		if s.Claim.OutputState != "" {
 			v.OutputState = s.Claim.OutputState
 		}
-		if s.Claim.FailureCode != "" || v.FailureCode != "stream_key_grant_expired" {
+		if s.Claim.FailureCode != "" || (v.FailureCode != "stream_key_grant_expired" && v.FailureCode != "refill_refused") {
 			v.FailureCode = s.Claim.FailureCode
 		}
 	}
@@ -820,6 +849,20 @@ func applyLiveTerminalView(s *operationSecrets, v *operationView, actualUnits in
 		v.Status = "failed"
 	}
 }
+
+// Observe media termination without committing usage or marking accounting done.
+func (e *PaidEngine) observeLiveEnd(ctx context.Context, o *repo.PaidOperation, s *operationSecrets, v *operationView) error {
+	if v.MediaEndedAt == nil {
+		now := time.Now().UTC()
+		v.MediaEndedAt = &now
+	}
+	o.State = "accounting_pending"
+	if e.deps.RTMPProbe != nil {
+		e.deps.RTMPProbe.CloseSession(o.ID.String())
+	}
+	return e.projectLive(ctx, o, s, v)
+}
+
 func (e *PaidEngine) finalizeLiveProjection(ctx context.Context, o *repo.PaidOperation, s *operationSecrets, v *operationView, actualUnits int64, closedAt time.Time) error {
 	applyLiveTerminalView(s, v, actualUnits)
 	o.FinishedAt = &closedAt
@@ -839,14 +882,18 @@ func (e *PaidEngine) projectLive(ctx context.Context, o *repo.PaidOperation, s *
 	if v.Status == "provisioning" {
 		status = "provisioning"
 	}
-	if o.FinishedAt != nil {
+	if o.FinishedAt != nil || v.MediaEndedAt != nil {
 		status = v.Status
+	}
+	endedAt := v.MediaEndedAt
+	if endedAt == nil {
+		endedAt = o.FinishedAt
 	}
 	var brokerID string
 	if s.Broker != nil {
 		brokerID = s.Broker.SessionID
 	}
-	_, err := e.deps.Pool.Exec(ctx, `UPDATE live_streams SET status=$2,broker_url=$3,broker_session_id=NULLIF($4,''),loc_session_id=$5,loc_work_id=$6,playback_url=NULLIF($7,''),ingest_url=$8,started_at=COALESCE(started_at,now()),last_broker_sync_at=now(),close_reason=NULLIF($9,''),ended_at=$10,loc_closed_at=$10,runner_status_json=$11 WHERE id=$1`, *o.LiveStreamID, status, s.Session.BrokerURL, brokerID, s.Session.SessionID, s.Session.WorkID, v.MasterURL, e.publicRTMPURL(), v.CloseReason, o.FinishedAt, mustPublicJSON(v))
+	_, err := e.deps.Pool.Exec(ctx, `UPDATE live_streams SET status=$2,broker_url=$3,broker_session_id=NULLIF($4,''),loc_session_id=$5,loc_work_id=$6,playback_url=NULLIF($7,''),ingest_url=$8,started_at=COALESCE(started_at,now()),last_broker_sync_at=now(),close_reason=NULLIF($9,''),ended_at=$10,loc_closed_at=$11,runner_status_json=$12 WHERE id=$1`, *o.LiveStreamID, status, s.Session.BrokerURL, brokerID, s.Session.SessionID, s.Session.WorkID, v.MasterURL, e.publicRTMPURL(), v.CloseReason, endedAt, o.FinishedAt, mustPublicJSON(v))
 	if err != nil {
 		return err
 	}

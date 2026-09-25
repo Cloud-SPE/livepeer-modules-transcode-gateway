@@ -247,20 +247,35 @@ func RegisterPortal(api huma.API, deps Deps) {
 			if op := operations[r.ID]; op != nil {
 				_ = json.Unmarshal(op.PublicJSON, &public)
 			}
-			if op := operations[r.ID]; op != nil && op.StopRequested && op.FinishedAt == nil {
+			accountingState := ""
+			settlementPending := false
+			endedAt := r.EndedAt
+			if op := operations[r.ID]; op != nil {
+				accountingState = op.State
+				if public.Status != "" {
+					status = public.Status
+				}
+				if public.MediaEndedAt != nil {
+					endedAt = public.MediaEndedAt
+				}
+				settlementPending = public.MediaEndedAt != nil && op.FinishedAt == nil
+			}
+			if op := operations[r.ID]; op != nil && op.StopRequested && op.FinishedAt == nil && public.MediaEndedAt == nil {
 				status = "ending"
 			}
 			out.Body.Items = append(out.Body.Items, PortalLiveStreamView{
-				ID:          r.ID,
-				Name:        derefString(r.Name),
-				Status:      status,
-				OutputState: public.OutputState,
-				CloseReason: public.CloseReason,
-				PlaybackURL: derefString(r.PlaybackURL),
-				ErrorText:   derefString(r.ErrorText),
-				CreatedAt:   r.CreatedAt,
-				StartedAt:   r.StartedAt,
-				EndedAt:     r.EndedAt,
+				ID:                r.ID,
+				Name:              derefString(r.Name),
+				Status:            status,
+				AccountingState:   accountingState,
+				SettlementPending: settlementPending,
+				OutputState:       public.OutputState,
+				CloseReason:       public.CloseReason,
+				PlaybackURL:       derefString(r.PlaybackURL),
+				ErrorText:         derefString(r.ErrorText),
+				CreatedAt:         r.CreatedAt,
+				StartedAt:         r.StartedAt,
+				EndedAt:           endedAt,
 			})
 		}
 		return out, nil
@@ -306,16 +321,18 @@ func RegisterPortal(api huma.API, deps Deps) {
 }
 
 type PortalLiveStreamView struct {
-	OutputState string     `json:"output_state,omitempty"`
-	CloseReason string     `json:"close_reason,omitempty"`
-	ID          uuid.UUID  `json:"id"`
-	Name        string     `json:"name,omitempty"`
-	Status      string     `json:"status"`
-	PlaybackURL string     `json:"playback_url,omitempty"`
-	ErrorText   string     `json:"error_text,omitempty"`
-	CreatedAt   time.Time  `json:"created_at"`
-	StartedAt   *time.Time `json:"started_at,omitempty"`
-	EndedAt     *time.Time `json:"ended_at,omitempty"`
+	AccountingState   string     `json:"accounting_state,omitempty"`
+	SettlementPending bool       `json:"settlement_pending"`
+	OutputState       string     `json:"output_state,omitempty"`
+	CloseReason       string     `json:"close_reason,omitempty"`
+	ID                uuid.UUID  `json:"id"`
+	Name              string     `json:"name,omitempty"`
+	Status            string     `json:"status"`
+	PlaybackURL       string     `json:"playback_url,omitempty"`
+	ErrorText         string     `json:"error_text,omitempty"`
+	CreatedAt         time.Time  `json:"created_at"`
+	StartedAt         *time.Time `json:"started_at,omitempty"`
+	EndedAt           *time.Time `json:"ended_at,omitempty"`
 }
 
 type PortalLiveStreamsOut struct {

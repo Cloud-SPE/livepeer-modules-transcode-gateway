@@ -101,6 +101,9 @@ type paidFixture struct {
 	exchangeAvailable                                                                bool
 	runway, units                                                                    int64
 	topupLostOnce                                                                    bool
+	topupErrorCode                                                                   string
+	locCloseStatus                                                                   int
+	brokerState                                                                      string
 	keyLostOnce                                                                      bool
 	keyTTL                                                                           time.Duration
 	keyRequests                                                                      []string
@@ -173,7 +176,11 @@ func (f *paidFixture) claimHeader(session bool) string {
 	return base64.StdEncoding.EncodeToString(b)
 }
 func (f *paidFixture) sessionResponse() map[string]any {
-	return map[string]any{"session_id": "broker-session", "gateway_session_id": f.gatewayID.String(), "work_id": f.workID, "state": "active", "credential": "broker-credential-secret", "runtime": map[string]any{"schema": "rtmp-hls/v1", "public": map[string]any{"rtmp_url": "rtmp://runner.invalid:1935/live", "hls_url": f.server.URL + "/hls/master.m3u8", "key_issue_url": f.server.URL + "/keys"}, "grants": []any{map[string]any{"id": "grant-1", "operations": []string{"stream-key-issue"}, "secret": "grant-secret", "expires_at": time.Now().Add(time.Hour).Format(time.RFC3339)}}}, "balance": map[string]any{"runway_seconds_estimate": f.runway, "claimed_units": f.units, "authorization_cap_remaining_units": 100, "unit": "output_seconds"}, "usage": map[string]any{"unit": "output_seconds", "claimed_total": f.units}, "output_state": f.outputState, "last_failure_code": f.failureCode, "close_reason": f.closeReason}
+	state := f.brokerState
+	if state == "" {
+		state = "active"
+	}
+	return map[string]any{"session_id": "broker-session", "gateway_session_id": f.gatewayID.String(), "work_id": f.workID, "state": state, "credential": "broker-credential-secret", "runtime": map[string]any{"schema": "rtmp-hls/v1", "public": map[string]any{"rtmp_url": "rtmp://runner.invalid:1935/live", "hls_url": f.server.URL + "/hls/master.m3u8", "key_issue_url": f.server.URL + "/keys"}, "grants": []any{map[string]any{"id": "grant-1", "operations": []string{"stream-key-issue"}, "secret": "grant-secret", "expires_at": time.Now().Add(time.Hour).Format(time.RFC3339)}}}, "balance": map[string]any{"runway_seconds_estimate": f.runway, "claimed_units": f.units, "authorization_cap_remaining_units": 100, "unit": "output_seconds"}, "usage": map[string]any{"unit": "output_seconds", "claimed_total": f.units}, "output_state": f.outputState, "last_failure_code": f.failureCode, "close_reason": f.closeReason}
 }
 func (f *paidFixture) serve(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/v1/job" && f.blockABR != nil {
@@ -298,6 +305,10 @@ func (f *paidFixture) serve(w http.ResponseWriter, r *http.Request) {
 		fixtureJSON(w, map[string]any{"work_id": refillWork, "request_id": r.Header.Get("Idempotency-Key"), "refill_seq": f.refills, "spend_authorization": base64.StdEncoding.EncodeToString([]byte("refill-authorization")), "accounting_mode": "wholesale_account", "funded_value_wei": "180", "expected_value_wei": "180"})
 	case strings.HasSuffix(path, "/topup"):
 		f.topups++
+		if f.topupErrorCode != "" {
+			fixtureError(w, 409, f.topupErrorCode)
+			return
+		}
 		if f.refillWorkID != "" {
 			f.workID = f.refillWorkID
 		}
@@ -331,6 +342,10 @@ func (f *paidFixture) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		f.closes++
+		if f.locCloseStatus != 0 {
+			fixtureError(w, f.locCloseStatus, "settlement_rejected")
+			return
+		}
 		fixtureJSON(w, map[string]any{"session_id": f.sessionID, "work_id": f.workID, "closed_at": time.Now(), "billed_value_wei": fmt.Sprint(f.units), "actual_units": f.units})
 	case strings.HasPrefix(path, "/v1/session/"):
 		if r.Header.Get("Authorization") != "Bearer broker-credential-secret" {

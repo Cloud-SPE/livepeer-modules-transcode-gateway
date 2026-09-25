@@ -233,12 +233,16 @@ func (e *PaidEngine) ViewLive(ctx context.Context, id, key uuid.UUID, includeKey
 	}
 	out := &LiveCreateOut{}
 	out.Body.Session = LiveSessionView{ID: id, Status: v.Status, Ingest: LiveIngest{RTMPURL: e.publicRTMPURL()}, Playback: LivePlayback{HLSURL: v.MasterURL}, CreatedAt: o.CreatedAt, EndedAt: o.FinishedAt, CloseReason: v.CloseReason, AccountingState: o.State, OutputState: v.OutputState, LastFailureCode: v.FailureCode}
-	if o.StopRequested && o.FinishedAt == nil {
+	if o.StopRequested && o.FinishedAt == nil && v.MediaEndedAt == nil {
 		out.Body.Session.Status = "ending"
 	}
-	if includeKey && o.FinishedAt == nil && !o.StopRequested {
+	if includeKey && o.FinishedAt == nil && !o.StopRequested && v.MediaEndedAt == nil && !s.RefillRefused {
 		out.Body.Session.Ingest.StreamKey = s.CustomerKey
 	}
+	if v.MediaEndedAt != nil {
+		out.Body.Session.EndedAt = v.MediaEndedAt
+	}
+	out.Body.Session.SettlementPending = v.MediaEndedAt != nil && o.FinishedAt == nil
 	if v.ActualUnits != nil {
 		out.Body.Session.ActualUnits = *v.ActualUnits
 	}
