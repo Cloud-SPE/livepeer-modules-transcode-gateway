@@ -311,6 +311,7 @@ type LivePlayback struct {
 }
 
 type LiveSessionView struct {
+	StatusMessage     string       `json:"status_message"`
 	SettlementPending bool         `json:"settlement_pending"`
 	AccountingState   string       `json:"accounting_state,omitempty"`
 	OutputState       string       `json:"output_state,omitempty"`

@@ -41,3 +41,22 @@ Observed 2026-09-25 UTC on EU production; broker and receiver revision `747a085d
 | Refill request | `b35b4f41-44ef-4e21-b5a3-e4d901effd1e` |
 | Successor authorization | `loc-auth:b35b4f41-44ef-4e21-b5a3-e4d901effd1e` |
 
+
+## Additional case: Stop after refused initial admission
+
+Gateway live `0732a9cf-63ae-4c2b-8aae-1acb25dc041d`, request
+`ddc21037-6cea-4614-aee1-d6f4e87340b9`, LOC session
+`65278f12-a629-4f6b-baae-24a9ea05a1ff` repeatedly received initial admission
+`INSUFFICIENT_WHOLESALE_CREDIT`. At 14:25 UTC September 25, production
+`GET /v1/exchange/ddc21037-6cea-4614-aee1-d6f4e87340b9` returned HTTP 404
+`NO_RECORD`, explicitly stating no non-admission claim had been issued.
+
+The gateway fix (`vgw-15z`) prevents fresh startup dispatch after Stop and waits
+for scoped evidence. Please ensure initial admission refusal persists a durable
+receiver-fenced rejection outcome discoverable by request ID, including after
+restart. Current local modules source has initial-admission recovery machinery;
+verify the deployed build and recovery of older requests, rather than assuming
+source availability proves production behavior. Coordinate signed non-admission
+issuance and LOC reconciliation for this existing request. A missing record is
+not proof that authority cannot still be admitted. Do not require replaying a
+potentially fresh open merely to cancel a request.

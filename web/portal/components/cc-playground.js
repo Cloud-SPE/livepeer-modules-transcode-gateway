@@ -228,7 +228,7 @@ class CcPlayground extends LitElement {
 Server: ${s.ingest.rtmp_url}
 Stream Key: ${s.ingest.stream_key}</pre>
             </details>`
-            : html`<p class="msg">${ending ? 'Stopping the stream and finalizing usage…' : 'Preparing your stream. Ingest details will appear when it is ready.'}</p>`}
+            : html`<p class="msg">${ending ? (s.status_message || 'Stopping the stream and finalizing usage…') : (s.status_message || 'Preparing your stream. Ingest details will appear when it is ready.')}</p>`}
           ${s.playback?.hls_url && !ending ? html`
             <p><strong>Playback:</strong> <code>${s.playback.hls_url}</code></p>
             <video controls muted></video>

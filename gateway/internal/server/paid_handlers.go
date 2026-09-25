@@ -242,6 +242,7 @@ func (e *PaidEngine) ViewLive(ctx context.Context, id, key uuid.UUID, includeKey
 	if v.MediaEndedAt != nil {
 		out.Body.Session.EndedAt = v.MediaEndedAt
 	}
+	out.Body.Session.StatusMessage = liveStartupMessage(o, out.Body.Session.Status)
 	out.Body.Session.SettlementPending = v.MediaEndedAt != nil && o.FinishedAt == nil
 	if v.ActualUnits != nil {
 		out.Body.Session.ActualUnits = *v.ActualUnits
@@ -300,4 +301,26 @@ func (e *PaidEngine) checkOffering(ctx context.Context, capability, offering, pr
 		return nil
 	}
 	return huma.Error503ServiceUnavailable("no_capable_offering")
+}
+
+// Only curated messages leave the recovery journal; upstream bodies may contain secrets.
+func liveStartupMessage(o *repo.PaidOperation, status string) string {
+	if status == "ending" && o.StopRequested && o.State == "dispatching" {
+		return "Stop requested. Startup retries are paused while we confirm whether the provider created a session. Cancellation will finish when its outcome is confirmed."
+	}
+	if status != "provisioning" || o.FinishedAt != nil || o.StopRequested {
+		return ""
+	}
+	if o.LastError == nil || *o.LastError == "" {
+		return ""
+	}
+	switch *o.LastError {
+	case "broker_http_401", "broker_http_403":
+		if o.State == "dispatching" {
+			return "Stream startup is blocked: the streaming provider rejected payment authorization. We are retrying automatically. If this continues, contact support with the stream ID."
+		}
+	case "loc_http_401", "loc_http_403":
+		return "Stream startup is blocked by the authorization service. We are retrying automatically. If this continues, contact support with the stream ID."
+	}
+	return "Stream startup is delayed by an upstream service. We are retrying automatically. If this continues, contact support with the stream ID."
 }

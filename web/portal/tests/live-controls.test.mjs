@@ -121,3 +121,25 @@ test('ended media keeps polling pending settlement across refresh', async () => 
   assert.equal(f.timers.size,0);
   f.instance.disconnectedCallback();
 });
+
+test('provisioning renders the server diagnosis and clears it after recovery', async () => {
+  let session = {id:'owned',status:'provisioning',status_message:'Stream startup is blocked: the streaming provider rejected payment authorization. We are retrying automatically.'};
+  const f = await fixture('cc-playground.js', path => {
+    if (path === '/v1/capabilities') return {data:[]};
+    if (path.startsWith('/portal/live-streams?')) return {items:[session]};
+    return {session};
+  });
+  function text(t) {
+    if (Array.isArray(t)) return t.map(text).join('');
+    if (t?.strings) return t.strings.join('')+t.values.map(text).join('');
+    return typeof t === 'string' ? t : '';
+  }
+  await f.instance.connectedCallback();
+  assert.match(text(f.instance.render()),/rejected payment authorization/);
+  assert.doesNotMatch(text(f.instance.render()),/Preparing your stream/);
+  session = {id:'owned',status:'live',status_message:'',ingest:{rtmp_url:'rtmp://test',stream_key:'key'}};
+  const [id,fn] = [...f.timers.entries()][0]; f.timers.delete(id); await fn();
+  assert.doesNotMatch(text(f.instance.render()),/rejected payment authorization/);
+  assert.match(text(f.instance.render()),/Ingest URL/);
+  f.instance.disconnectedCallback();
+});

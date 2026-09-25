@@ -114,6 +114,7 @@ class CcLiveStreams extends LitElement {
                     <td>${s.name || html`<span class="msg">(unnamed)</span>`}
                       <br><span class="msg"><code>${s.id.slice(0,8)}…</code></span></td>
                     <td>${pill(this.stopping.has(s.id) && !terminal(s) ? 'ending' : s.status)}
+                      ${s.status_message ? html`<br><span class="msg warn">${s.status_message}</span>` : ''}
                       ${s.settlement_pending ? html`<br><span class="msg">Settlement pending</span>` : ''}
                       ${s.output_state ? html`<br><span class="msg">Output: ${s.output_state}</span>` : ''}
                       ${s.close_reason ? html`<br><span class="msg">${s.close_reason}</span>` : ''}

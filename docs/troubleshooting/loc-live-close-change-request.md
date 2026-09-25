@@ -38,3 +38,26 @@ Observed 2026-09-25 UTC on EU production; broker and receiver revision `747a085d
 | Refill request | `b35b4f41-44ef-4e21-b5a3-e4d901effd1e` |
 | Successor authorization | `loc-auth:b35b4f41-44ef-4e21-b5a3-e4d901effd1e` |
 
+
+## Additional case: Stop before initial live admission
+
+Gateway bead `vgw-15z`: live `0732a9cf-63ae-4c2b-8aae-1acb25dc041d`,
+LOC session `65278f12-a629-4f6b-baae-24a9ea05a1ff`, request
+`ddc21037-6cea-4614-aee1-d6f4e87340b9` was rejected by the receiver with
+`INSUFFICIENT_WHOLESALE_CREDIT` on revision 0. The user then requested Stop.
+
+The gateway now stops fresh admission attempts and queries the broker exchange.
+A receiver-fenced `ADMISSION_REJECTED` outcome ends the media view while keeping
+accounting pending. An existing session is recovered and stopped; an unknown
+outcome stays unresolved. No zero-use settlement is fabricated.
+
+The current LOC session close contract requires a signed session settlement;
+the session janitor also queries session settlements. Please add initial live
+non-admission reconciliation using request-ID exchange evidence, scoped signed
+non-admission and verified receiver cancellation/expiry. Support issued-but-never-
+dispatched grants too. Expose final zero-use accounting through the authenticated
+session read API only after verifying unused authority can no longer be admitted.
+The gateway can then consume that result and release its pending reservation.
+Test cancellation before dispatch, refusal, lost admission response, admitted
+session, delayed admission, and repeated/restarted reconciliation. Unknown or
+unsigned absence must never authorize release.

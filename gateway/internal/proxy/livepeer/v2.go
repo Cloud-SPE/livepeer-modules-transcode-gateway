@@ -477,3 +477,32 @@ func (c *HTTPClient) IssueRuntimeKeyV2(ctx context.Context, target, secret strin
 	_, err = c.jsonV2(ctx, http.MethodPost, target, h, body, out)
 	return err
 }
+
+// SessionOpenOutcomeV2 is lifecycle evidence, not authority to settle or refund.
+type SessionOpenOutcomeV2 struct {
+	RequestID        string `json:"request_id"`
+	SessionID        string `json:"session_id"`
+	GatewaySessionID string `json:"gateway_session_id"`
+	Outcome          string `json:"outcome"`
+}
+
+func (c *HTTPClient) LookupSessionOpenV2(ctx context.Context, brokerURL, requestID, gatewayID string) (*SessionOpenOutcomeV2, error) {
+	var out SessionOpenOutcomeV2
+	_, err := c.jsonV2(ctx, http.MethodGet, endpoint(brokerURL, "/v1/exchange/"+url.PathEscape(requestID)), nil, nil, &out)
+	if err != nil {
+		return nil, err
+	}
+	if out.RequestID != requestID || (out.SessionID != "" && out.GatewaySessionID != gatewayID) {
+		return nil, fmt.Errorf("broker: session exchange identity mismatch")
+	}
+	switch out.Outcome {
+	case "ADMISSION_REJECTED", "NOT_ADMITTED":
+		if out.SessionID != "" {
+			return nil, fmt.Errorf("broker: contradictory session admission outcome")
+		}
+	case "IN_FLIGHT", "ACCOUNTING_PENDING", "SETTLED", "NO_RECORD", "ADMITTED_OUTCOME_UNKNOWN", "ADMITTED_EVIDENCE_EXPIRED":
+	default:
+		return nil, ErrAccountingPending
+	}
+	return &out, nil
+}

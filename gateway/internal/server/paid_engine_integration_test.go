@@ -81,6 +81,9 @@ func paidTestPool(t *testing.T) *pgxpool.Pool {
 var fixtureSignature = "0x" + strings.Repeat("1", 130)
 
 type paidFixture struct {
+	liveExchange                                                                     string
+	liveExchangeID                                                                   string
+	openStatus                                                                       int
 	admissionRejected, jobNotAdmitted                                                bool
 	jobEstimated, jobLimit                                                           int64
 	blockABR                                                                         <-chan struct{}
@@ -235,6 +238,11 @@ func (f *paidFixture) serve(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Livepeer-Settlement", f.claimHeader(false))
 		}
 	case strings.HasPrefix(path, "/v1/exchange/"):
+		if f.liveExchange != "" {
+			fixtureJSON(w, map[string]any{"request_id": f.requestID, "outcome": f.liveExchange, "session_id": f.liveExchangeID, "gateway_session_id": f.gatewayID.String()})
+			return
+		}
+
 		if f.admissionRejected {
 			fixtureJSON(w, map[string]any{"request_id": f.requestID, "outcome": "ADMISSION_REJECTED"})
 			return
@@ -264,6 +272,10 @@ func (f *paidFixture) serve(w http.ResponseWriter, r *http.Request) {
 		fixtureJSON(w, map[string]any{"session_id": f.sessionID, "request_id": f.requestID, "work_id": f.workID, "broker_url": f.server.URL, "protocol": "paid-session/v1", "session": map[string]any{"descriptor_schema": "rtmp-hls/v1", "refill": "extensible"}, "spend_authorization": base64.StdEncoding.EncodeToString([]byte("session-authorization")), "accounting_mode": "wholesale_account", "funded_value_wei": "120", "expected_value_wei": "120"})
 	case path == "/v1/session":
 		f.opens++
+		if f.openStatus != 0 {
+			fixtureError(w, f.openStatus, "payment_invalid")
+			return
+		}
 		if r.Header.Get("Livepeer-Protocol") != "paid-session/v1" || r.Header.Get("Livepeer-Caller-Proof") == "" {
 			fixtureError(w, 401, "missing_proof")
 			return

@@ -115,3 +115,20 @@ final evidence. Usage is neither committed nor refunded merely because media
 ended. Portal history and the selected stream continue polling pending settlement.
 A definitive broker `refill_refused` stops replaying that revision and requests
 termination; ambiguous failures retain idempotent recovery. See bead `vgw-e2o`.
+
+Live session detail and portal history also expose `status_message` (empty when
+there is no startup diagnostic). While provisioning retries an upstream failure,
+the portal displays a curated explanation instead of the ordinary preparation
+message. Broker authorization refusals are distinguished from general upstream
+delays. Raw upstream bodies and private recovery data are never exposed, and a
+generic authorization rejection does not imply a specific credit shortfall.
+Messages clear on successful recovery or Stop; retry and accounting semantics
+remain unchanged. Tracked in `vgw-cq9`.
+
+Stop during provisioning (`vgw-15z`) prevents fresh broker opens. The gateway
+queries the original request's exchange: a confirmed rejected admission ends
+media without finalizing accounting; a confirmed existing session permits
+idempotent credential recovery followed by End. Missing or ambiguous evidence
+keeps cancellation pending with an explanatory message. Before any authorization
+attempt, a queued intent can be canceled locally. Once authority may have been
+issued, reservations remain until LOC confirms final accounting.

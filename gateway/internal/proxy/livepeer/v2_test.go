@@ -271,3 +271,42 @@ func TestRejectedExchangeRequiresMatchingRequest(t *testing.T) {
 		})
 	}
 }
+
+func TestSessionOpenLookupRejectsUnscopedOutcomes(t *testing.T) {
+	for _, scenario := range []string{"rejected", "existing", "wrong-request", "wrong-session", "contradiction", "unknown", "missing"} {
+		t.Run(scenario, func(t *testing.T) {
+			body := map[string]string{"request_id": "request-1", "outcome": "ADMISSION_REJECTED"}
+			switch scenario {
+			case "existing":
+				body["outcome"] = "IN_FLIGHT"
+				body["session_id"] = "session-1"
+				body["gateway_session_id"] = "gateway-1"
+			case "wrong-request":
+				body["request_id"] = "another"
+			case "wrong-session":
+				body["session_id"] = "session-1"
+				body["gateway_session_id"] = "another"
+			case "contradiction":
+				body["session_id"] = "session-1"
+				body["gateway_session_id"] = "gateway-1"
+			case "unknown":
+				body["outcome"] = "new-outcome"
+			}
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != "GET" || r.URL.Path != "/v1/exchange/request-1" {
+					t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+				}
+				if scenario == "missing" {
+					w.WriteHeader(404)
+				}
+				_ = json.NewEncoder(w).Encode(body)
+			}))
+			defer srv.Close()
+			_, err := NewHTTPClient(time.Second).LookupSessionOpenV2(context.Background(), srv.URL, "request-1", "gateway-1")
+			wantErr := scenario != "rejected" && scenario != "existing"
+			if (err != nil) != wantErr {
+				t.Fatalf("error=%v", err)
+			}
+		})
+	}
+}

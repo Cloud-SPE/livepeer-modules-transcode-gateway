@@ -486,6 +486,19 @@ func convertBroker(in any) (*brokerSession, error) {
 }
 func brokerTerminal(state string) bool { return state == "ended" || state == "failed" }
 func (e *PaidEngine) runLive(ctx context.Context, l *repo.OperationLock, o *repo.PaidOperation, s *operationSecrets, v *operationView) error {
+	// No authorization request can have happened before preparation was saved.
+	if o.StopRequested && s.Preparation == nil && s.Session == nil {
+		if err := e.deps.Usage.Refund(ctx, o.ReservationID, 0, "canceled_before_authorization"); err != nil {
+			return err
+		}
+		if _, err := e.deps.Pool.Exec(ctx, `UPDATE live_streams SET status='ended',close_reason='gateway_close',ended_at=COALESCE(ended_at,now()) WHERE id=$1`, *o.LiveStreamID); err != nil {
+			return err
+		}
+		now := time.Now().UTC()
+		o.State, o.FinishedAt = "canceled", &now
+		v.Status, v.CloseReason, v.MediaEndedAt = "ended", "gateway_close", &now
+		return nil
+	}
 	if s.Preparation == nil {
 		p, err := e.deps.LOC.PrepareSessionV2(ctx, loc.PrepareSessionRequestV2{RequestID: o.ID.String() + ":prepare", Capability: s.Capability, Offering: s.Offering, DescriptorSchema: "rtmp-hls/v1"})
 		if err != nil {
@@ -516,6 +529,23 @@ func (e *PaidEngine) runLive(ctx context.Context, l *repo.OperationLock, o *repo
 		return e.finishLive(ctx, l, o, s, v)
 	}
 	if s.Broker == nil {
+		// Stop may arrive while LOC is issuing authority. Check before dispatch,
+		// not only after the broker has successfully returned a descriptor.
+		current, err := l.Get(ctx)
+		if err != nil {
+			return err
+		}
+		if current.StopRequested {
+			o.StopRequested = true
+		}
+		if o.StopRequested {
+			existing, err := e.stopUnopenedLive(ctx, l, o, s, v)
+			if err != nil || !existing {
+				return err
+			}
+			// Only a confirmed existing session permits replay to recover credentials.
+			// The immutable request identity makes this a lookup of the original open.
+		}
 		auth, err := e.auth(s, s.Session.RequestID, s.Session.SpendAuthorization, s.Session.WorkID)
 		if err != nil {
 			return err
@@ -737,6 +767,52 @@ func (e *PaidEngine) lookupLiveClaim(ctx context.Context, s *operationSecrets) (
 	}
 	return claim, nil
 }
+
+// stopUnopenedLive never submits a fresh open after Stop. A rejected exchange
+// proves no media session exists, but only LOC may finalize accounting.
+func (e *PaidEngine) stopUnopenedLive(ctx context.Context, l *repo.OperationLock, o *repo.PaidOperation, s *operationSecrets, v *operationView) (bool, error) {
+	s.EndReason = "gateway_close"
+	if e.deps.RTMPProbe != nil {
+		e.deps.RTMPProbe.CloseSession(o.ID.String())
+	}
+	if recovered, err := e.recoverClosedLive(ctx, o, s, v); recovered || err != nil {
+		return false, err
+	}
+	if !s.DispatchAttempted || v.MediaEndedAt != nil {
+		v.Status, v.CloseReason = "ended", "gateway_close"
+		if err := e.observeLiveEnd(ctx, o, s, v); err != nil {
+			return false, err
+		}
+		return false, livepeer.ErrAccountingPending
+	}
+	outcome, err := e.deps.HTTP.LookupSessionOpenV2(ctx, s.Session.BrokerURL, s.Session.RequestID, s.Preparation.GatewaySessionID.String())
+	if err != nil {
+		return false, err
+	}
+	switch outcome.Outcome {
+	case "ADMISSION_REJECTED", "NOT_ADMITTED":
+		v.Status, v.CloseReason, v.OutputState = "ended", "gateway_close", "waiting"
+		if err := e.observeLiveEnd(ctx, o, s, v); err != nil {
+			return false, err
+		}
+		return false, livepeer.ErrAccountingPending
+	case "SETTLED":
+		claim, err := e.lookupLiveClaim(ctx, s)
+		if err != nil {
+			return false, err
+		}
+		s.Claim = claim
+		return false, e.finishLive(ctx, l, o, s, v)
+	case "IN_FLIGHT", "ACCOUNTING_PENDING":
+		if outcome.SessionID != "" {
+			return true, nil
+		}
+		return false, livepeer.ErrAccountingPending
+	default:
+		return false, livepeer.ErrAccountingPending
+	}
+}
+
 func (e *PaidEngine) endLive(ctx context.Context, l *repo.OperationLock, o *repo.PaidOperation, s *operationSecrets, v *operationView) error {
 	if v.MediaEndedAt == nil {
 		o.State = "ending"

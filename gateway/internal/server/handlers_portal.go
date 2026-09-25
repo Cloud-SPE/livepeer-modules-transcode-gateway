@@ -249,6 +249,7 @@ func RegisterPortal(api huma.API, deps Deps) {
 			}
 			accountingState := ""
 			settlementPending := false
+			statusMessage := ""
 			endedAt := r.EndedAt
 			if op := operations[r.ID]; op != nil {
 				accountingState = op.State
@@ -263,7 +264,11 @@ func RegisterPortal(api huma.API, deps Deps) {
 			if op := operations[r.ID]; op != nil && op.StopRequested && op.FinishedAt == nil && public.MediaEndedAt == nil {
 				status = "ending"
 			}
+			if op := operations[r.ID]; op != nil {
+				statusMessage = liveStartupMessage(op, status)
+			}
 			out.Body.Items = append(out.Body.Items, PortalLiveStreamView{
+				StatusMessage:     statusMessage,
 				ID:                r.ID,
 				Name:              derefString(r.Name),
 				Status:            status,
@@ -321,6 +326,7 @@ func RegisterPortal(api huma.API, deps Deps) {
 }
 
 type PortalLiveStreamView struct {
+	StatusMessage     string     `json:"status_message"`
 	AccountingState   string     `json:"accounting_state,omitempty"`
 	SettlementPending bool       `json:"settlement_pending"`
 	OutputState       string     `json:"output_state,omitempty"`
