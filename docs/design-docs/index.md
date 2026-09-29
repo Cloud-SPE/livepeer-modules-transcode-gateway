@@ -6,6 +6,7 @@ liberally.
 
 | Doc | What it covers | Status |
 |---|---|---|
+| [`shared-wallet-review.md`](./shared-wallet-review.md) | Shared-wallet source compatibility, migration findings, and verification evidence at pinned revisions. | live |
 | [`modules-v2.md`](./modules-v2.md) | Current wire, recovery and source compatibility boundaries. | live |
 | [`core-beliefs.md`](./core-beliefs.md) | The non-negotiable invariants — anything that violates these is a bug. | live |
 | [`boot-sequence.md`](./boot-sequence.md) | What the gateway binary does between `main()` and "listening on :4000". | live |

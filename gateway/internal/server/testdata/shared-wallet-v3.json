@@ -1,0 +1,526 @@
+[
+  {
+    "name": "loc-prod-test-job",
+    "kind": "job",
+    "account": "loc-prod-test",
+    "work_id": "loc-prod-test-job",
+    "request_id": "loc-prod-test-job-request",
+    "unit": "video-frame-megapixel",
+    "authorization": "CqYECh9saXZlcGVlci1zcGVuZC1hdXRob3JpemF0aW9uL3YzEhRQUKT0s/kzjDRy3MAah8dqFEs8nBoUEREREREREREREREREREREREREREiEWxvYy1wcm9kLXRlc3Qtam9iKhlsb2MtcHJvZC10ZXN0LWpvYi1yZXF1ZXN0OgtwYWlkLWpvYi92MUITdmlkZW86dHJhbnNjb2RlLmFickoEdGVzdFKGAQoDCgEBEAEaFXZpZGVvLWZyYW1lLW1lZ2FwaXhlbCITdmlkZW86dHJhbnNjb2RlLmFicioEdGVzdDJLCgNxLTEQARogAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAiIBERERERERERERERERERERERERERERERERERERERERERWgMKAWRgZGoUMjAyNi0wOC0yMFQwMDowMDowMFpyFDIwMjYtMDgtMjFUMDA6MDA6MDBaeiBEE2+jVbNnihFGrRb36GSelPtPwh/nfoMQwGD2HKr/ioIBIQJ5vmZ++dy7rFWgYpXOhwsHApv82y3OKNlZ8oFbFvgXmJoBHmh0dHBzOi8vYnJva2VyLmV4YW1wbGUuaW52YWxpZKABsckCqgEDd2VpsgFCMHhhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhugENbG9jLXByb2QtdGVzdBJBSCNlbA1ZsLR3e/WtdQ0/0WRAK9WuIpP7dltjaDGxTr9djB4UQNG1pl5i+H2SnjvAIspqzHqKGF8Y9EzNqZrPpBw=",
+    "caller_proof": "BhVRbrG606NhIuuT2Q6NqqUrvqlpkScwxD/f6aZU498SMe+7jGAamFUlfVql4v3syxKAo5kyuR1eh7wwpIFG1xw=",
+    "settlement": {
+      "payload": {
+        "accepted_quote_ref": {
+          "quote_id": "q-1",
+          "quote_version": "1",
+          "constraint_fingerprint": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+          "route_fingerprint": "ERERERERERERERERERERERERERERERERERERERERERE="
+        },
+        "work_unit_name": "video-frame-megapixel",
+        "estimated_units": "31",
+        "actual_units": "31",
+        "billed_units": "31",
+        "debited_units": "31",
+        "payment_cumulative_units": "0",
+        "funded_value_wei": {
+          "value": "AQ=="
+        },
+        "billed_value_wei": {
+          "value": "Hw=="
+        },
+        "outcome": "OVERFUNDED",
+        "work_id": "loc-prod-test-job",
+        "issued_at": "2026-08-20T12:00:00Z",
+        "job_id": "broker-job",
+        "request_id": "loc-prod-test-job-request",
+        "settlement_domain_id": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "wholesale_account_id": "loc-prod-test",
+        "authorization_id": "loc-prod-test-job",
+        "authorized_value_wei": {
+          "value": "ZA=="
+        },
+        "reserved_value_wei": {
+          "value": "ZA=="
+        },
+        "released_value_wei": {
+          "value": "RQ=="
+        },
+        "account_funding_value_wei": {
+          "value": ""
+        },
+        "account_version": "9007199254740993"
+      },
+      "signature": {
+        "algorithm": "secp256k1",
+        "canonicalization": "jcs",
+        "value": "0xe4d3df584709d4ba31021eb97c4f71f8616cd82e521420c89ea13c2cedc6396318e39bfdab62a60768b454269ef40bfc7eb2db9d81e5ba5eba51f6e62d18de941c"
+      }
+    }
+  },
+  {
+    "name": "loc-prod-test-session",
+    "kind": "session",
+    "account": "loc-prod-test",
+    "work_id": "loc-prod-test-session",
+    "request_id": "loc-prod-test-session-request",
+    "unit": "output_seconds",
+    "authorization": "CtMECh9saXZlcGVlci1zcGVuZC1hdXRob3JpemF0aW9uL3YzEhRQUKT0s/kzjDRy3MAah8dqFEs8nBoUEREREREREREREREREREREREREREiFWxvYy1wcm9kLXRlc3Qtc2Vzc2lvbiodbG9jLXByb2QtdGVzdC1zZXNzaW9uLXJlcXVlc3QyJDExMTExMTExLTExMTEtNDExMS04MTExLTExMTExMTExMTExMToPcGFpZC1zZXNzaW9uL3YxQhR2aWRlbzp0cmFuc2NvZGUubGl2ZUoEdGVzdFKAAQoDCgEBEAEaDm91dHB1dF9zZWNvbmRzIhR2aWRlbzp0cmFuc2NvZGUubGl2ZSoEdGVzdDJLCgNxLTEQARogAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAiIBERERERERERERERERERERERERERERERERERERERERERWgMKAWRgZGoUMjAyNi0wOC0yMFQwMDowMDowMFpyFDIwMjYtMDgtMjFUMDA6MDA6MDBaeiBEE2+jVbNnihFGrRb36GSelPtPwh/nfoMQwGD2HKr/ioIBIQJ5vmZ++dy7rFWgYpXOhwsHApv82y3OKNlZ8oFbFvgXmJoBHmh0dHBzOi8vYnJva2VyLmV4YW1wbGUuaW52YWxpZKABsckCqgEDd2VpsgFCMHhhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhugENbG9jLXByb2QtdGVzdBJBRo815+/QhRjf3nMPmCPoyhlPnE+dIfPt+e3nLnTRUdssJR+W8ZKBSz2d2gxTTQ4+1oBEbUPCZJ+l5LkMG9ZM+Bs=",
+    "caller_proof": "Nqdxr7IKnXhdHREUlTHC7AOlzWgcfc4BqPP8FwMe7iJmRwb8PlJKe6K8NM5FN7G50rDz4Z2RawJ8uJXFcY+JJxs=",
+    "settlement": {
+      "payload": {
+        "accepted_quote_ref": {
+          "quote_id": "q-1",
+          "quote_version": "1",
+          "constraint_fingerprint": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+          "route_fingerprint": "ERERERERERERERERERERERERERERERERERERERERERE="
+        },
+        "work_unit_name": "output_seconds",
+        "actual_units": "31",
+        "billed_units": "31",
+        "funded_value_wei": {
+          "value": "ZA=="
+        },
+        "billed_value_wei": {
+          "value": "Hw=="
+        },
+        "outcome": "OVERFUNDED",
+        "session_id": "broker-session-1",
+        "gateway_session_id": "11111111-1111-4111-8111-111111111111",
+        "work_id": "loc-prod-test-session",
+        "predecessor_work_id": "",
+        "rotation_generation": 0,
+        "claimed_units": "31",
+        "debited_units": "31",
+        "generation_debited_units": "31",
+        "generation_billed_value_wei": {
+          "value": "Hw=="
+        },
+        "generation_funded_value_wei": {
+          "value": "ZA=="
+        },
+        "amount_wei": {
+          "value": "AQ=="
+        },
+        "per_units": "1",
+        "settlement_seq": "1",
+        "issued_at": "2026-08-20T12:00:00Z",
+        "state": "closed",
+        "settlement_domain_id": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "wholesale_account_id": "loc-prod-test",
+        "authorization_id": "loc-prod-test-session",
+        "authorized_value_wei": {
+          "value": "ZA=="
+        },
+        "reserved_value_wei": {
+          "value": "ZA=="
+        },
+        "released_value_wei": {
+          "value": "RQ=="
+        }
+      },
+      "signature": {
+        "algorithm": "secp256k1",
+        "canonicalization": "jcs",
+        "value": "0x95bae4a10d7881b0228d3bf37ba5f3a30cb4e0594bf05058df2747e9a61b6b1666be6b276d8a008552248555910fb434070e1d49f6ae633b0d6ca63160bae30c1b"
+      }
+    }
+  },
+  {
+    "name": "loc-prod-test-refill",
+    "kind": "refill",
+    "account": "loc-prod-test",
+    "work_id": "loc-prod-test-refill",
+    "request_id": "loc-prod-test-refill-request",
+    "unit": "output_seconds",
+    "authorization": "CuwECh9saXZlcGVlci1zcGVuZC1hdXRob3JpemF0aW9uL3YzEhRQUKT0s/kzjDRy3MAah8dqFEs8nBoUEREREREREREREREREREREREREREiFGxvYy1wcm9kLXRlc3QtcmVmaWxsKhxsb2MtcHJvZC10ZXN0LXJlZmlsbC1yZXF1ZXN0MiQxMTExMTExMS0xMTExLTQxMTEtODExMS0xMTExMTExMTExMTE6D3BhaWQtc2Vzc2lvbi92MUIUdmlkZW86dHJhbnNjb2RlLmxpdmVKBHRlc3RSgAEKAwoBARABGg5vdXRwdXRfc2Vjb25kcyIUdmlkZW86dHJhbnNjb2RlLmxpdmUqBHRlc3QySwoDcS0xEAEaIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIiAREREREREREREREREREREREREREREREREREREREREREVoDCgFkYGRqFDIwMjYtMDgtMjBUMDA6MDA6MDBachQyMDI2LTA4LTIxVDAwOjAwOjAwWnogRBNvo1WzZ4oRRq0W9+hknpT7T8If536DEMBg9hyq/4qCASECeb5mfvncu6xVoGKVzocLBwKb/NstzijZWfKBWxb4F5iIAQGSARVsb2MtcHJvZC10ZXN0LXNlc3Npb26aAR5odHRwczovL2Jyb2tlci5leGFtcGxlLmludmFsaWSgAbHJAqoBA3dlabIBQjB4YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYboBDWxvYy1wcm9kLXRlc3QSQRFIGfqdTsDFZalAZkYKtuRN5xWk1Cw6rJpnGUqx8dIsUrGo/7DB7HOb/JH7mrmOaapyUOdO2SddWR70KDPZf1oc",
+    "caller_proof": "e86fRr8MVyG6wBibV3UtITjYLfy3IlNzPjrUbrxQObwLQ90X2qGMiGKWW268YBl0SKB74QIC96QCU/dbrBLrgxw=",
+    "settlement": {
+      "payload": {
+        "accepted_quote_ref": {
+          "quote_id": "q-1",
+          "quote_version": "1",
+          "constraint_fingerprint": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+          "route_fingerprint": "ERERERERERERERERERERERERERERERERERERERERERE="
+        },
+        "work_unit_name": "output_seconds",
+        "actual_units": "31",
+        "billed_units": "31",
+        "funded_value_wei": {
+          "value": "ZA=="
+        },
+        "billed_value_wei": {
+          "value": "Hw=="
+        },
+        "outcome": "OVERFUNDED",
+        "session_id": "broker-session-1",
+        "gateway_session_id": "11111111-1111-4111-8111-111111111111",
+        "work_id": "loc-prod-test-refill",
+        "predecessor_work_id": "",
+        "rotation_generation": 0,
+        "claimed_units": "31",
+        "debited_units": "31",
+        "generation_debited_units": "31",
+        "generation_billed_value_wei": {
+          "value": "Hw=="
+        },
+        "generation_funded_value_wei": {
+          "value": "ZA=="
+        },
+        "amount_wei": {
+          "value": "AQ=="
+        },
+        "per_units": "1",
+        "settlement_seq": "2",
+        "issued_at": "2026-08-20T12:00:00Z",
+        "state": "closed",
+        "settlement_domain_id": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "wholesale_account_id": "loc-prod-test",
+        "authorization_id": "loc-prod-test-refill",
+        "authorized_value_wei": {
+          "value": "ZA=="
+        },
+        "reserved_value_wei": {
+          "value": "ZA=="
+        },
+        "released_value_wei": {
+          "value": "RQ=="
+        }
+      },
+      "signature": {
+        "algorithm": "secp256k1",
+        "canonicalization": "jcs",
+        "value": "0x66cc51c5ea0973919432401b8222890145e9202c999a777050eafbda9e30c3667651e2ccf861c74cd53c9ffaf6a5b32e0c7313f54203cb50d44460ff6c73bb9e1b"
+      }
+    }
+  },
+  {
+    "name": "loc-prod-test-refill_refused",
+    "kind": "refill_refused",
+    "account": "loc-prod-test",
+    "work_id": "loc-prod-test-refill_refused",
+    "request_id": "loc-prod-test-refill_refused-request",
+    "unit": "output_seconds",
+    "authorization": "CvwECh9saXZlcGVlci1zcGVuZC1hdXRob3JpemF0aW9uL3YzEhRQUKT0s/kzjDRy3MAah8dqFEs8nBoUEREREREREREREREREREREREREREiHGxvYy1wcm9kLXRlc3QtcmVmaWxsX3JlZnVzZWQqJGxvYy1wcm9kLXRlc3QtcmVmaWxsX3JlZnVzZWQtcmVxdWVzdDIkMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExOg9wYWlkLXNlc3Npb24vdjFCFHZpZGVvOnRyYW5zY29kZS5saXZlSgR0ZXN0UoABCgMKAQEQARoOb3V0cHV0X3NlY29uZHMiFHZpZGVvOnRyYW5zY29kZS5saXZlKgR0ZXN0MksKA3EtMRABGiAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACIgERERERERERERERERERERERERERERERERERERERERERFaAwoBZGBkahQyMDI2LTA4LTIwVDAwOjAwOjAwWnIUMjAyNi0wOC0yMVQwMDowMDowMFp6IEQTb6NVs2eKEUatFvfoZJ6U+0/CH+d+gxDAYPYcqv+KggEhAnm+Zn753LusVaBilc6HCwcCm/zbLc4o2VnygVsW+BeYiAEBkgEVbG9jLXByb2QtdGVzdC1zZXNzaW9umgEeaHR0cHM6Ly9icm9rZXIuZXhhbXBsZS5pbnZhbGlkoAGxyQKqAQN3ZWmyAUIweGFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWG6AQ1sb2MtcHJvZC10ZXN0EkEgkTNZBpI5TkhdR/DLFbgdyjgi0UlBDGS4lSOoNQcdPFd5vNmFbH0edkgqbJHGZdC93TvdtW0lT+hW7i1JQ5NgHA==",
+    "caller_proof": "yboup3szEEmKURHJWWLdPFKPPTkY3gaJ5/CkN4Q/W0EYAvy6hnwgk3owFFZBrCUAtu9JZaipH6854Kes0Kk6dhs=",
+    "settlement": {
+      "payload": {
+        "accepted_quote_ref": {
+          "quote_id": "q-1",
+          "quote_version": "1",
+          "constraint_fingerprint": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+          "route_fingerprint": "ERERERERERERERERERERERERERERERERERERERERERE="
+        },
+        "work_unit_name": "output_seconds",
+        "actual_units": "31",
+        "billed_units": "31",
+        "funded_value_wei": {
+          "value": "ZA=="
+        },
+        "billed_value_wei": {
+          "value": "Hw=="
+        },
+        "outcome": "OVERFUNDED",
+        "session_id": "broker-session-1",
+        "gateway_session_id": "11111111-1111-4111-8111-111111111111",
+        "work_id": "loc-prod-test-session",
+        "predecessor_work_id": "",
+        "rotation_generation": 0,
+        "claimed_units": "31",
+        "debited_units": "31",
+        "generation_debited_units": "31",
+        "generation_billed_value_wei": {
+          "value": "Hw=="
+        },
+        "generation_funded_value_wei": {
+          "value": "ZA=="
+        },
+        "amount_wei": {
+          "value": "AQ=="
+        },
+        "per_units": "1",
+        "settlement_seq": "2",
+        "issued_at": "2026-08-20T12:00:00Z",
+        "state": "closed",
+        "settlement_domain_id": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "wholesale_account_id": "loc-prod-test",
+        "authorization_id": "loc-prod-test-session",
+        "authorized_value_wei": {
+          "value": "ZA=="
+        },
+        "reserved_value_wei": {
+          "value": "ZA=="
+        },
+        "released_value_wei": {
+          "value": "RQ=="
+        }
+      },
+      "signature": {
+        "algorithm": "secp256k1",
+        "canonicalization": "jcs",
+        "value": "0xa561d01d254ae24d46bba048816baeb55aa25225049cdf883578537f47acbc5a2ef079e04056f2da5555693c0a1561a4ed8bf9ca3056e27b31ab6ad336c75e761c"
+      }
+    }
+  },
+  {
+    "name": "loc-dev-test-job",
+    "kind": "job",
+    "account": "loc-dev-test",
+    "work_id": "loc-dev-test-job",
+    "request_id": "loc-dev-test-job-request",
+    "unit": "video-frame-megapixel",
+    "authorization": "CqMECh9saXZlcGVlci1zcGVuZC1hdXRob3JpemF0aW9uL3YzEhRQUKT0s/kzjDRy3MAah8dqFEs8nBoUEREREREREREREREREREREREREREiEGxvYy1kZXYtdGVzdC1qb2IqGGxvYy1kZXYtdGVzdC1qb2ItcmVxdWVzdDoLcGFpZC1qb2IvdjFCE3ZpZGVvOnRyYW5zY29kZS5hYnJKBHRlc3RShgEKAwoBARABGhV2aWRlby1mcmFtZS1tZWdhcGl4ZWwiE3ZpZGVvOnRyYW5zY29kZS5hYnIqBHRlc3QySwoDcS0xEAEaIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIiAREREREREREREREREREREREREREREREREREREREREREVoDCgFkYGRqFDIwMjYtMDgtMjBUMDA6MDA6MDBachQyMDI2LTA4LTIxVDAwOjAwOjAwWnogRBNvo1WzZ4oRRq0W9+hknpT7T8If536DEMBg9hyq/4qCASECeb5mfvncu6xVoGKVzocLBwKb/NstzijZWfKBWxb4F5iaAR5odHRwczovL2Jyb2tlci5leGFtcGxlLmludmFsaWSgAbHJAqoBA3dlabIBQjB4YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYboBDGxvYy1kZXYtdGVzdBJBI9fUPF/4kGrU2wYmshL2rL9WzTu6KjgDeVxbhLpNDhsjr0mwd8/ZVKtB0dOR3GGCO4ndEyXktmMlbwkz3gXUAhw=",
+    "caller_proof": "9HVYhgNcm9r4dH1kT/fLI+xP/oHynghXsv38BPh2FxYkGBfZ2Y//5nNQ67A50nr93tsO1W1iVvCNUPP/1CZC9hw=",
+    "settlement": {
+      "payload": {
+        "accepted_quote_ref": {
+          "quote_id": "q-1",
+          "quote_version": "1",
+          "constraint_fingerprint": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+          "route_fingerprint": "ERERERERERERERERERERERERERERERERERERERERERE="
+        },
+        "work_unit_name": "video-frame-megapixel",
+        "estimated_units": "31",
+        "actual_units": "31",
+        "billed_units": "31",
+        "debited_units": "31",
+        "payment_cumulative_units": "0",
+        "funded_value_wei": {
+          "value": "AQ=="
+        },
+        "billed_value_wei": {
+          "value": "Hw=="
+        },
+        "outcome": "OVERFUNDED",
+        "work_id": "loc-dev-test-job",
+        "issued_at": "2026-08-20T12:00:00Z",
+        "job_id": "broker-job",
+        "request_id": "loc-dev-test-job-request",
+        "settlement_domain_id": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "wholesale_account_id": "loc-dev-test",
+        "authorization_id": "loc-dev-test-job",
+        "authorized_value_wei": {
+          "value": "ZA=="
+        },
+        "reserved_value_wei": {
+          "value": "ZA=="
+        },
+        "released_value_wei": {
+          "value": "RQ=="
+        },
+        "account_funding_value_wei": {
+          "value": ""
+        },
+        "account_version": "9007199254740993"
+      },
+      "signature": {
+        "algorithm": "secp256k1",
+        "canonicalization": "jcs",
+        "value": "0x3e5efc5d5c05356b7982fef8e8b15780e2791d4dc12584841fdfc6ac7958e2b2142ac4dd7e8d08571ded5b57ddf6e789005188a6c8da4724c2e6842a629c00ae1b"
+      }
+    }
+  },
+  {
+    "name": "loc-dev-test-session",
+    "kind": "session",
+    "account": "loc-dev-test",
+    "work_id": "loc-dev-test-session",
+    "request_id": "loc-dev-test-session-request",
+    "unit": "output_seconds",
+    "authorization": "CtAECh9saXZlcGVlci1zcGVuZC1hdXRob3JpemF0aW9uL3YzEhRQUKT0s/kzjDRy3MAah8dqFEs8nBoUEREREREREREREREREREREREREREiFGxvYy1kZXYtdGVzdC1zZXNzaW9uKhxsb2MtZGV2LXRlc3Qtc2Vzc2lvbi1yZXF1ZXN0MiQxMTExMTExMS0xMTExLTQxMTEtODExMS0xMTExMTExMTExMTE6D3BhaWQtc2Vzc2lvbi92MUIUdmlkZW86dHJhbnNjb2RlLmxpdmVKBHRlc3RSgAEKAwoBARABGg5vdXRwdXRfc2Vjb25kcyIUdmlkZW86dHJhbnNjb2RlLmxpdmUqBHRlc3QySwoDcS0xEAEaIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIiAREREREREREREREREREREREREREREREREREREREREREVoDCgFkYGRqFDIwMjYtMDgtMjBUMDA6MDA6MDBachQyMDI2LTA4LTIxVDAwOjAwOjAwWnogRBNvo1WzZ4oRRq0W9+hknpT7T8If536DEMBg9hyq/4qCASECeb5mfvncu6xVoGKVzocLBwKb/NstzijZWfKBWxb4F5iaAR5odHRwczovL2Jyb2tlci5leGFtcGxlLmludmFsaWSgAbHJAqoBA3dlabIBQjB4YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYboBDGxvYy1kZXYtdGVzdBJB7fYVJ4BwJQWfwKQYtEkV0fGBKN9sbDMCWkAbVdI3+x1rGgHZJRUxrlnygnFwoEGawxDf+AhSzdLD/lmcEbvJ+Bw=",
+    "caller_proof": "t9CW2Fgd9n8Ukfa1tO34JAnhuM1+dspSzL/G3O/bLuFLx/G63L2gJkYuunZl/5QnT2c314kQBmikRaHMk8H8FRs=",
+    "settlement": {
+      "payload": {
+        "accepted_quote_ref": {
+          "quote_id": "q-1",
+          "quote_version": "1",
+          "constraint_fingerprint": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+          "route_fingerprint": "ERERERERERERERERERERERERERERERERERERERERERE="
+        },
+        "work_unit_name": "output_seconds",
+        "actual_units": "31",
+        "billed_units": "31",
+        "funded_value_wei": {
+          "value": "ZA=="
+        },
+        "billed_value_wei": {
+          "value": "Hw=="
+        },
+        "outcome": "OVERFUNDED",
+        "session_id": "broker-session-1",
+        "gateway_session_id": "11111111-1111-4111-8111-111111111111",
+        "work_id": "loc-dev-test-session",
+        "predecessor_work_id": "",
+        "rotation_generation": 0,
+        "claimed_units": "31",
+        "debited_units": "31",
+        "generation_debited_units": "31",
+        "generation_billed_value_wei": {
+          "value": "Hw=="
+        },
+        "generation_funded_value_wei": {
+          "value": "ZA=="
+        },
+        "amount_wei": {
+          "value": "AQ=="
+        },
+        "per_units": "1",
+        "settlement_seq": "1",
+        "issued_at": "2026-08-20T12:00:00Z",
+        "state": "closed",
+        "settlement_domain_id": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "wholesale_account_id": "loc-dev-test",
+        "authorization_id": "loc-dev-test-session",
+        "authorized_value_wei": {
+          "value": "ZA=="
+        },
+        "reserved_value_wei": {
+          "value": "ZA=="
+        },
+        "released_value_wei": {
+          "value": "RQ=="
+        }
+      },
+      "signature": {
+        "algorithm": "secp256k1",
+        "canonicalization": "jcs",
+        "value": "0xbaac39128229265aaa0e1ee2b82f7d43f2b9f080baf19589fefae49e18ab87d05fc2004a2f471acb5d8ae8611667eb12549aed2b9900d6e08996068bc4fe95e51b"
+      }
+    }
+  },
+  {
+    "name": "loc-dev-test-refill",
+    "kind": "refill",
+    "account": "loc-dev-test",
+    "work_id": "loc-dev-test-refill",
+    "request_id": "loc-dev-test-refill-request",
+    "unit": "output_seconds",
+    "authorization": "CugECh9saXZlcGVlci1zcGVuZC1hdXRob3JpemF0aW9uL3YzEhRQUKT0s/kzjDRy3MAah8dqFEs8nBoUEREREREREREREREREREREREREREiE2xvYy1kZXYtdGVzdC1yZWZpbGwqG2xvYy1kZXYtdGVzdC1yZWZpbGwtcmVxdWVzdDIkMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExOg9wYWlkLXNlc3Npb24vdjFCFHZpZGVvOnRyYW5zY29kZS5saXZlSgR0ZXN0UoABCgMKAQEQARoOb3V0cHV0X3NlY29uZHMiFHZpZGVvOnRyYW5zY29kZS5saXZlKgR0ZXN0MksKA3EtMRABGiAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACIgERERERERERERERERERERERERERERERERERERERERERFaAwoBZGBkahQyMDI2LTA4LTIwVDAwOjAwOjAwWnIUMjAyNi0wOC0yMVQwMDowMDowMFp6IEQTb6NVs2eKEUatFvfoZJ6U+0/CH+d+gxDAYPYcqv+KggEhAnm+Zn753LusVaBilc6HCwcCm/zbLc4o2VnygVsW+BeYiAEBkgEUbG9jLWRldi10ZXN0LXNlc3Npb26aAR5odHRwczovL2Jyb2tlci5leGFtcGxlLmludmFsaWSgAbHJAqoBA3dlabIBQjB4YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYboBDGxvYy1kZXYtdGVzdBJBfEK5qR3ipDkjTlqzagEMcOu0mfC2KO3VXRyHZysNVnFC3sSpryQeKIZWcNsT55JP/zpHltOAYMgyq0BnuMO5XBw=",
+    "caller_proof": "idlrMz4VVADHHhbwLvENFBt6vmdS1pPX8aX7lpDMrm59EWNFpkE6KpaENWxHbDRpkoduGTrNoQxqpggVxls2rhw=",
+    "settlement": {
+      "payload": {
+        "accepted_quote_ref": {
+          "quote_id": "q-1",
+          "quote_version": "1",
+          "constraint_fingerprint": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+          "route_fingerprint": "ERERERERERERERERERERERERERERERERERERERERERE="
+        },
+        "work_unit_name": "output_seconds",
+        "actual_units": "31",
+        "billed_units": "31",
+        "funded_value_wei": {
+          "value": "ZA=="
+        },
+        "billed_value_wei": {
+          "value": "Hw=="
+        },
+        "outcome": "OVERFUNDED",
+        "session_id": "broker-session-1",
+        "gateway_session_id": "11111111-1111-4111-8111-111111111111",
+        "work_id": "loc-dev-test-refill",
+        "predecessor_work_id": "",
+        "rotation_generation": 0,
+        "claimed_units": "31",
+        "debited_units": "31",
+        "generation_debited_units": "31",
+        "generation_billed_value_wei": {
+          "value": "Hw=="
+        },
+        "generation_funded_value_wei": {
+          "value": "ZA=="
+        },
+        "amount_wei": {
+          "value": "AQ=="
+        },
+        "per_units": "1",
+        "settlement_seq": "2",
+        "issued_at": "2026-08-20T12:00:00Z",
+        "state": "closed",
+        "settlement_domain_id": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "wholesale_account_id": "loc-dev-test",
+        "authorization_id": "loc-dev-test-refill",
+        "authorized_value_wei": {
+          "value": "ZA=="
+        },
+        "reserved_value_wei": {
+          "value": "ZA=="
+        },
+        "released_value_wei": {
+          "value": "RQ=="
+        }
+      },
+      "signature": {
+        "algorithm": "secp256k1",
+        "canonicalization": "jcs",
+        "value": "0xe7ed1a931b63172ba5e689df24531467fe7327a5c5d6caa4d9e9e3ffc057892a53d5cf83606381701e01d37afe254272bc2504c8ee9eb9d2372230afe47950041b"
+      }
+    }
+  },
+  {
+    "name": "loc-dev-test-refill_refused",
+    "kind": "refill_refused",
+    "account": "loc-dev-test",
+    "work_id": "loc-dev-test-refill_refused",
+    "request_id": "loc-dev-test-refill_refused-request",
+    "unit": "output_seconds",
+    "authorization": "CvgECh9saXZlcGVlci1zcGVuZC1hdXRob3JpemF0aW9uL3YzEhRQUKT0s/kzjDRy3MAah8dqFEs8nBoUEREREREREREREREREREREREREREiG2xvYy1kZXYtdGVzdC1yZWZpbGxfcmVmdXNlZCojbG9jLWRldi10ZXN0LXJlZmlsbF9yZWZ1c2VkLXJlcXVlc3QyJDExMTExMTExLTExMTEtNDExMS04MTExLTExMTExMTExMTExMToPcGFpZC1zZXNzaW9uL3YxQhR2aWRlbzp0cmFuc2NvZGUubGl2ZUoEdGVzdFKAAQoDCgEBEAEaDm91dHB1dF9zZWNvbmRzIhR2aWRlbzp0cmFuc2NvZGUubGl2ZSoEdGVzdDJLCgNxLTEQARogAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAiIBERERERERERERERERERERERERERERERERERERERERERWgMKAWRgZGoUMjAyNi0wOC0yMFQwMDowMDowMFpyFDIwMjYtMDgtMjFUMDA6MDA6MDBaeiBEE2+jVbNnihFGrRb36GSelPtPwh/nfoMQwGD2HKr/ioIBIQJ5vmZ++dy7rFWgYpXOhwsHApv82y3OKNlZ8oFbFvgXmIgBAZIBFGxvYy1kZXYtdGVzdC1zZXNzaW9umgEeaHR0cHM6Ly9icm9rZXIuZXhhbXBsZS5pbnZhbGlkoAGxyQKqAQN3ZWmyAUIweGFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWG6AQxsb2MtZGV2LXRlc3QSQcpsHqYht9vg46HE/b03AnqD7QMVO8WL6vbNFNHxXQ//bdbWAjv72v7skJL7cxUyzQoenb5TcLCzHlSBYTLiLycb",
+    "caller_proof": "EhSvISoiMy1q4wif0LLbQEjLrnfd9beZRdmLzShzGLpOEcUNGo5pULrVzUg8m9mA9jabkup4mPWDleJCmODEsxw=",
+    "settlement": {
+      "payload": {
+        "accepted_quote_ref": {
+          "quote_id": "q-1",
+          "quote_version": "1",
+          "constraint_fingerprint": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+          "route_fingerprint": "ERERERERERERERERERERERERERERERERERERERERERE="
+        },
+        "work_unit_name": "output_seconds",
+        "actual_units": "31",
+        "billed_units": "31",
+        "funded_value_wei": {
+          "value": "ZA=="
+        },
+        "billed_value_wei": {
+          "value": "Hw=="
+        },
+        "outcome": "OVERFUNDED",
+        "session_id": "broker-session-1",
+        "gateway_session_id": "11111111-1111-4111-8111-111111111111",
+        "work_id": "loc-dev-test-session",
+        "predecessor_work_id": "",
+        "rotation_generation": 0,
+        "claimed_units": "31",
+        "debited_units": "31",
+        "generation_debited_units": "31",
+        "generation_billed_value_wei": {
+          "value": "Hw=="
+        },
+        "generation_funded_value_wei": {
+          "value": "ZA=="
+        },
+        "amount_wei": {
+          "value": "AQ=="
+        },
+        "per_units": "1",
+        "settlement_seq": "2",
+        "issued_at": "2026-08-20T12:00:00Z",
+        "state": "closed",
+        "settlement_domain_id": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "wholesale_account_id": "loc-dev-test",
+        "authorization_id": "loc-dev-test-session",
+        "authorized_value_wei": {
+          "value": "ZA=="
+        },
+        "reserved_value_wei": {
+          "value": "ZA=="
+        },
+        "released_value_wei": {
+          "value": "RQ=="
+        }
+      },
+      "signature": {
+        "algorithm": "secp256k1",
+        "canonicalization": "jcs",
+        "value": "0x86d1c2061c9d15851179df8da6ac64a349f77567032d59d8091879397e8442772800ce288d5a8a84fd336e3d6d5707941796a34926c7515b970e0a158ac1e7c71c"
+      }
+    }
+  }
+]

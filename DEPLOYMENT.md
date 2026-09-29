@@ -186,3 +186,51 @@ messages, request/response bodies, credential-bearing URLs, and unknown error
 codes are deliberately excluded. Logs diagnose failures; they do not change
 settlement or retry policy. Existing operations acquire the new diagnostics
 when their next recovery attempt runs after deployment.
+
+## Shared-wallet authorization v3 cutover
+
+The outer gateway protocols remain `paid-job/v1` and `paid-session/v1`.
+Spend authorization payloads now use `livepeer-spend-authorization/v3` and
+carry a signed `wholesale_account_id`. The gateway forwards this authorization
+and the complete broker evidence unchanged; LOC verifies account identity.
+Do not add a payer wallet or `WHOLESALE_ACCOUNT_ID` to gateway or runner
+configuration. Configure the stable account label on LOC. Each independent
+LOC environment needs a distinct label; multiple gateway users retain their
+retail ledgers within that LOC account.
+
+Before cutover, stop new admissions and drain/reconcile legacy grants and
+pending funding on the compatible old stack. LOC migration 0029 intentionally
+blocks unresolved grants/funding. Reconcile both LOC and receiver state;
+never erase grants or relabel old balances to bypass migration. Snapshot the
+LOC database, receiver/broker ledgers and payer database, plus the gateway
+operation journal and its existing encryption/caller keys.
+
+Build and pin matching LOC, payer-daemon, capability-broker and receiver-daemon
+revisions/digests. Old/new mixes reject incompatible account requests; a
+reused image tag is not proof of compatibility. Preserve each payer database's
+`ticket_stream_id` through restart; independent concurrent payers must not
+share cloned databases. LOC migration retains legacy empty-account balances
+for audit, without moving their value into the new namespace. Downgrade cannot
+merge account namespaces safely.
+
+Run local interoperability validation from this repo using LOC's installed
+Python environment and this gateway's Go toolchain:
+
+```sh
+../livepeer-modules-open-clearinghouse/.venv/bin/python scripts/shared-wallet-conformance.py
+```
+
+This checks deterministic public test-key v3 authorization fixtures, delegated
+caller proofs, ABR/live/refill transport, encrypted journal recovery and LOC's
+real signed-evidence verification (including wrong-account rejection). The
+eight fixtures are checked in, so normal Go tests require no sibling repo.
+Regenerate intentionally with `--generate`; `--loc-repo` selects another LOC
+checkout. These offline fixtures do not establish current production readiness.
+
+Before reopening admission, run LOC's real-stack conformance and confirm the
+production account query reports `isolation_version=1` with the expected
+label. Complete a paid ABR job and a live stream through refill, gateway
+restart, playback and stop. Confirm one final retail settlement, retired
+successor grants and no recurring accounting-pending retries. Verify HLS from
+an external player using the advertised HTTPS URL; wallet isolation does not
+fix TLS routing or invalid media playlists.
